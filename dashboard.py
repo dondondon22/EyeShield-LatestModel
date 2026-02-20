@@ -285,6 +285,10 @@ class EyeShieldApp(QMainWindow):
         actions_layout.addWidget(btn_users)
         actions_layout.addStretch()
 
+        if self.role == "clinician":
+            btn_users.setEnabled(False)
+            btn_users.setToolTip("Admins only")
+
         layout.addWidget(actions_group)
 
         # Recent Activity
