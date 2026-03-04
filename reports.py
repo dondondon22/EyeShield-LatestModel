@@ -36,7 +36,7 @@ class ReportsPage(QWidget):
         self._result_rows = []
         self._filtered_rows = []
         self.setStyleSheet("""
-            QWidget { background: #f8f9fa; color: #212529; font-family: 'Segoe UI', 'Inter', 'Arial'; }
+            QWidget { background: #f8f9fa; color: #212529; font-family: 'Calibri', 'Inter', 'Arial'; }
             QGroupBox { background: #ffffff; border: 1px solid #dee2e6; border-radius: 8px; }
             QLineEdit, QComboBox, QTableWidget { background: #ffffff; border: 1px solid #ced4da; border-radius: 8px; }
             QPushButton:focus, QTableWidget:focus { border: 1px solid #0d6efd; }
@@ -53,7 +53,7 @@ class ReportsPage(QWidget):
 
         title = QLabel("DR Screening Reports")
         title.setObjectName("pageHeader")
-        title.setStyleSheet("font-size:24px;font-weight:700;color:#007bff;font-family:'Segoe UI','Inter','Arial';")
+        title.setStyleSheet("font-size:24px;font-weight:700;color:#007bff;font-family:'Calibri','Inter','Arial';")
         subtitle = QLabel("Complete diabetic retinopathy screening outcomes from locally saved records")
         subtitle.setObjectName("pageSubtitle")
         subtitle.setStyleSheet("font-size:13px;color:#6c757d;")

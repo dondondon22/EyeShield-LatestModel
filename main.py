@@ -33,13 +33,15 @@ def load_svg_icon(svg_path, size=256):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    # Modern font — Segoe UI is built into Windows 10/11
-    modern_font = QFont("Segoe UI", 10)
+    # Modern font — Segoe UI Variable is available on Windows 11; falls back gracefully
+    modern_font = QFont("Segoe UI Variable", 11)
+    if not modern_font.exactMatch():
+        modern_font = QFont("Segoe UI", 11)
     modern_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     app.setFont(modern_font)
 
     # Enforce font family globally via stylesheet
-    app.setStyleSheet("* { font-family: 'Segoe UI', 'Inter', 'Helvetica Neue', 'Arial', sans-serif; }")
+    app.setStyleSheet("* { font-family: 'Segoe UI Variable', 'Segoe UI', 'Inter', 'Arial', sans-serif; font-size: 13px; text-decoration: none; }")
 
     # Set application-wide icon
     import os

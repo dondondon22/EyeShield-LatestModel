@@ -20,7 +20,7 @@ DARK_STYLESHEET = """
     QWidget {
         background: #1e1e2e;
         color: #cdd6f4;
-        font-family: "Segoe UI", "Inter", "Arial";
+        font-family: "Segoe UI Variable", "Segoe UI", "Inter", "Arial";
         font-size: 13px;
     }
     QMainWindow, QStackedWidget {
@@ -160,7 +160,7 @@ DARK_STYLESHEET = """
         color: #89b4fa;
         font-size: 24px;
         font-weight: 700;
-        font-family: "Segoe UI", "Inter", "Arial";
+        font-family: "Calibri", "Inter", "Arial";
     }
     QLabel#pageSubtitle {
         color: #a6adc8;
@@ -356,7 +356,7 @@ class SettingsPage(QWidget):
 
         self.title_label = QLabel("Settings")
         self.title_label.setObjectName("pageHeader")
-        self.title_label.setStyleSheet("font-size:24px;font-weight:700;color:#007bff;font-family:'Segoe UI','Inter','Arial';")
+        self.title_label.setStyleSheet("font-size:24px;font-weight:700;color:#007bff;font-family:'Calibri','Inter','Arial';")
         self.subtitle_label = QLabel("Local offline preferences for this installation")
         self.subtitle_label.setObjectName("pageSubtitle")
         self.subtitle_label.setStyleSheet("font-size:13px;color:#6c757d;")
@@ -410,18 +410,7 @@ class SettingsPage(QWidget):
 
         layout.addWidget(pref_group)
 
-        # About/Info
-        about_group = QGroupBox("About")
-        self.about_group = about_group
-        about_layout = QVBoxLayout(about_group)
-        self.about_version_label = QLabel("EyeShield EMR v1.0.0")
-        self.about_copyright_label = QLabel("© 2026 EyeShield Team")
-        self.about_contact_label = QLabel("For support, contact: support@eyeshield.local")
-        about_layout.addWidget(self.about_version_label)
-        about_layout.addWidget(self.about_copyright_label)
-        about_layout.addWidget(self.about_contact_label)
-        layout.addWidget(about_group)
-
+        # ── Action buttons (right after preferences) ──────────────────────
         button_row = QHBoxLayout()
         button_row.addStretch(1)
         self.reset_btn = QPushButton("Reset Defaults")
@@ -438,6 +427,59 @@ class SettingsPage(QWidget):
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("statusLabel")
         layout.addWidget(self.status_label)
+
+        # ── Divider ───────────────────────────────────────────────────────
+        divider = QLabel()
+        divider.setFixedHeight(1)
+        divider.setStyleSheet("background:#dee2e6; margin: 4px 0;")
+        layout.addWidget(divider)
+
+        # ── About ─────────────────────────────────────────────────────────
+        about_group = QGroupBox("About")
+        self.about_group = about_group
+        about_layout = QVBoxLayout(about_group)
+        about_layout.setSpacing(4)
+        self.about_version_label = QLabel("EyeShield EMR v1.0.0")
+        self.about_copyright_label = QLabel("© 2026 EyeShield Team")
+        self.about_contact_label = QLabel("For support, contact: support@eyeshield.local")
+        for lbl in (self.about_version_label, self.about_copyright_label, self.about_contact_label):
+            lbl.setStyleSheet("color:#495057; font-size:13px;")
+        about_layout.addWidget(self.about_version_label)
+        about_layout.addWidget(self.about_copyright_label)
+        about_layout.addWidget(self.about_contact_label)
+        layout.addWidget(about_group)
+
+        # ── Terms of Use ──────────────────────────────────────────────────
+        terms_group = QGroupBox("Terms of Use")
+        self.terms_group = terms_group
+        terms_layout = QVBoxLayout(terms_group)
+        self.terms_label = QLabel(
+            "By using EyeShield EMR you agree to use the software solely for its "
+            "intended medical-records purpose. Unauthorised reproduction, distribution, "
+            "or reverse engineering is prohibited. The software is provided 'as is' "
+            "without warranty of any kind. The EyeShield Team is not liable for any "
+            "loss arising from the use or inability to use this software."
+        )
+        self.terms_label.setWordWrap(True)
+        self.terms_label.setStyleSheet("color:#495057; font-size:12px; line-height:1.5;")
+        terms_layout.addWidget(self.terms_label)
+        layout.addWidget(terms_group)
+
+        # ── Privacy Policy ────────────────────────────────────────────────
+        privacy_group = QGroupBox("Privacy Policy")
+        self.privacy_group = privacy_group
+        privacy_layout = QVBoxLayout(privacy_group)
+        self.privacy_label = QLabel(
+            "EyeShield EMR stores all patient and user data locally on this device. "
+            "No personal information is transmitted to external servers. You are "
+            "responsible for securing access to this device and its data. Regular "
+            "backups are recommended. For data-deletion requests or privacy concerns, "
+            "please contact your system administrator."
+        )
+        self.privacy_label.setWordWrap(True)
+        self.privacy_label.setStyleSheet("color:#495057; font-size:12px; line-height:1.5;")
+        privacy_layout.addWidget(self.privacy_label)
+        layout.addWidget(privacy_group)
 
         self.load_settings()
         self.theme_combo.currentTextChanged.connect(self.apply_live_preview)
@@ -465,6 +507,8 @@ class SettingsPage(QWidget):
                 "confirm": "Ask confirmation before destructive actions",
                 "compact": "Use compact table rows",
                 "about": "About",
+                "terms": "Terms of Use",
+                "privacy": "Privacy Policy",
                 "reset": "Reset Defaults",
                 "save": "Save Settings",
             },
@@ -478,6 +522,8 @@ class SettingsPage(QWidget):
                 "confirm": "Pedir confirmación antes de acciones destructivas",
                 "compact": "Usar filas compactas en tablas",
                 "about": "Acerca de",
+                "terms": "Términos de Uso",
+                "privacy": "Política de Privacidad",
                 "reset": "Restablecer",
                 "save": "Guardar configuración",
             },
@@ -491,6 +537,8 @@ class SettingsPage(QWidget):
                 "confirm": "Demander confirmation avant les actions destructrices",
                 "compact": "Utiliser des lignes de tableau compactes",
                 "about": "À propos",
+                "terms": "Conditions d'utilisation",
+                "privacy": "Politique de confidentialité",
                 "reset": "Réinitialiser",
                 "save": "Enregistrer les paramètres",
             },
@@ -521,6 +569,8 @@ class SettingsPage(QWidget):
         self.confirm_deletions.setText(pack["confirm"])
         self.compact_tables.setText(pack["compact"])
         self.about_group.setTitle(pack["about"])
+        self.terms_group.setTitle(pack["terms"])
+        self.privacy_group.setTitle(pack["privacy"])
         self.reset_btn.setText(pack["reset"])
         self.save_btn.setText(pack["save"])
 

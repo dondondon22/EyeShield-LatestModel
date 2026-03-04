@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QStackedWidget, QGroupBox, QMessageBox, QGridLayout
 )
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter
+from PySide6.QtCore import Qt, QSize, QByteArray
+from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont
 from PySide6.QtSvg import QSvgRenderer
 
 from screening import ScreeningPage
@@ -36,7 +36,8 @@ class EyeShieldApp(QMainWindow):
         self._saved_styles = {}
 
         self.setWindowTitle("EyeShield – DR Screening")
-        self.setMinimumSize(1350, 850)
+        self.setMinimumSize(1100, 700)
+        self.resize(1400, 860)
 
         # Set app icon
         import os
@@ -51,10 +52,11 @@ class EyeShieldApp(QMainWindow):
         # Create top navigation bar
         nav_bar = QWidget()
         nav_bar.setObjectName("navBar")
-        nav_bar.setMinimumHeight(70)
+        nav_bar.setFixedHeight(78)
+        self.nav_bar = nav_bar
         nav_layout = QHBoxLayout(nav_bar)
-        nav_layout.setContentsMargins(12, 8, 12, 8)
-        nav_layout.setSpacing(12)
+        nav_layout.setContentsMargins(12, 4, 12, 4)
+        nav_layout.setSpacing(4)
         nav_bar.setStyleSheet("""
             QWidget#navBar {
                 background: #f8f9fa;
@@ -63,37 +65,70 @@ class EyeShieldApp(QMainWindow):
         """)
 
 
-        # App title + icon
-        title_label = QLabel("EyeShield")
+        # App title + icon in a fixed-width container so they never shift
+        title_icon_container = QWidget()
+        title_icon_container.setFixedSize(165, 70)
+        title_icon_container.setStyleSheet("background: transparent;")
+        title_icon_layout = QHBoxLayout(title_icon_container)
+        title_icon_layout.setContentsMargins(0, 0, 0, 0)
+        title_icon_layout.setSpacing(2)
+
+        self.title_label = QLabel("EyeShield")
+        title_label = self.title_label
         title_label.setObjectName("appTitle")
-        title_label.setStyleSheet("color: #007bff; font-size: 24px; font-weight: 700;")
-        nav_layout.addWidget(title_label)
+        title_label.setStyleSheet("color: #007bff; font-size: 20px; font-weight: 700; text-decoration: none;")
+        title_font = QFont("Segoe UI Variable", 14)
+        title_font.setBold(True)
+        title_font.setUnderline(False)
+        title_label.setFont(title_font)
+        title_label.setFixedWidth(118)
+        title_icon_layout.addWidget(title_label)
 
         icon_label = QLabel()
-        icon_pixmap = self._load_svg_pixmap(_icon_path, 256).scaled(
+        self.nav_icon_label = icon_label
+        self._icon_path = _icon_path
+        icon_pixmap = self._load_svg_pixmap_colored(_icon_path, "#007bff", 256).scaled(
             QSize(38, 38), Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
         if not icon_pixmap.isNull():
             icon_label.setPixmap(icon_pixmap)
         icon_label.setFixedSize(38, 38)
         icon_label.setAlignment(Qt.AlignCenter)
-        nav_layout.addWidget(icon_label)
-        nav_layout.addSpacing(20)
+        icon_label.setStyleSheet("background: transparent;")
+        title_icon_layout.addWidget(icon_label)
+
+        self.title_icon_container = title_icon_container
+        nav_layout.addWidget(title_icon_container)
+        nav_layout.addStretch(1)
 
         # Navigation buttons with icons and small text labels below
         def nav_button_with_label(icon, text):
             w = QWidget()
+            w.setFixedSize(60, 66)
+            w.setStyleSheet("QWidget { background: transparent; }")
             v = QVBoxLayout(w)
-            v.setContentsMargins(0, 0, 0, 0)
-            v.setSpacing(0)
+            v.setContentsMargins(0, 2, 0, 2)
+            v.setSpacing(2)
+
             btn = QPushButton(icon)
             btn.setStyleSheet(self.get_nav_button_style(icon_only=True))
-            btn.setFixedSize(40, 40)
+            btn.setFixedSize(50, 40)
+            btn_font = QFont("Segoe UI Variable", 14)
+            btn_font.setUnderline(False)
+            btn_font.setStrikeOut(False)
+            btn.setFont(btn_font)
+
             label = QLabel(text)
             label.setAlignment(Qt.AlignHCenter)
-            label.setStyleSheet("font-size: 11px; color: #495057; margin-top: 0px;")
-            v.addWidget(btn)
-            v.addWidget(label)
+            label.setFixedWidth(60)
+            lbl_font = QFont("Segoe UI Variable", 8)
+            lbl_font.setUnderline(False)
+            lbl_font.setStrikeOut(False)
+            label.setFont(lbl_font)
+            label.setStyleSheet("font-size: 10px; color: #495057; margin-top: 0px; text-decoration: none; border: none;")
+
+            v.addWidget(btn, 0, Qt.AlignHCenter)
+            v.addWidget(label, 0, Qt.AlignHCenter)
             return w, btn, label
 
         navs = [
@@ -111,33 +146,39 @@ class EyeShieldApp(QMainWindow):
         for icon, text in navs:
             w, btn, label = nav_button_with_label(icon, text)
             nav_layout.addWidget(w)
+            nav_layout.addStretch(1)
             nav_widgets.append(w)
             nav_buttons.append(btn)
             nav_labels.append(label)
 
         self.nav_buttons = nav_buttons
         self.nav_labels = nav_labels
+        self.nav_widgets = nav_widgets
 
         # User info on the right
-        nav_layout.addStretch()
         user_info = QLabel(f"👤 {self.username} ({self.role})")
+        self.user_info_label = user_info
         user_info.setObjectName("userInfo")
-        user_info.setStyleSheet("color: #495057; font-size: 12px; font-weight: 500; margin-left: 16px; margin-right: 8px;")
+        user_info.setStyleSheet("color: #495057; font-size: 12px; font-weight: 500; margin-left: 16px; margin-right: 8px; text-decoration: none;")
         nav_layout.addWidget(user_info)
 
-        logout_btn = QPushButton("Logout")
+        logout_btn = QPushButton("\u23fb")
         logout_btn.setObjectName("logoutBtn")
+        logout_btn.setFixedSize(44, 44)
+        logout_btn.setToolTip("Shutdown / Log out")
         logout_btn.setStyleSheet("""
             QPushButton {
                 background: #dc3545;
                 color: white;
                 border: 1px solid #bb2d3b;
                 border-radius: 8px;
-                padding: 8px 16px;
-                font-size: 12px;
+                padding: 0px;
+                font-size: 18px;
                 font-weight: 600;
+                text-decoration: none;
             }
             QPushButton:hover { background: #c82333; }
+            QPushButton:focus { outline: none; border: 1px solid #bb2d3b; }
         """)
         logout_btn.clicked.connect(self.handle_logout)
         nav_layout.addWidget(logout_btn)
@@ -154,7 +195,7 @@ class EyeShieldApp(QMainWindow):
         if self.role != "admin":
             nav_buttons[4].setEnabled(False)
             nav_buttons[4].setToolTip("Admins only")
-            nav_labels[4].setStyleSheet("font-size: 10px; color: #adb5bd; margin-top: 0px;")
+            nav_labels[4].setStyleSheet("font-size: 10px; color: #adb5bd; margin-top: 0px; text-decoration: none; border: none;")
 
         # (All navigation button connections are now handled via nav_buttons list above)
 
@@ -196,6 +237,9 @@ class EyeShieldApp(QMainWindow):
         self.refresh_dashboard()
         self._set_active_nav(0)
 
+        # Ensure nav bar styles are correct for the initial theme
+        self._apply_nav_theme(False)
+
         # Apply saved theme from settings (must run after all pages are parented)
         saved_theme = self.settings_page.theme_combo.currentText()
         if saved_theme == "Dark":
@@ -213,6 +257,99 @@ class EyeShieldApp(QMainWindow):
         renderer.render(painter)
         painter.end()
         return QPixmap.fromImage(image)
+
+    @staticmethod
+    def _load_svg_pixmap_colored(svg_path: str, color: str, size: int = 64) -> QPixmap:
+        """Render an SVG with all black strokes/fills replaced by the given color."""
+        try:
+            with open(svg_path, "r", encoding="utf-8") as f:
+                svg_text = f.read()
+        except OSError:
+            return QPixmap()
+        svg_text = svg_text.replace('stroke="black"', f'stroke="{color}"')
+        svg_text = svg_text.replace('fill="black"', f'fill="{color}"')
+        svg_text = svg_text.replace('fill="white"', 'fill="transparent"')
+        data = QByteArray(svg_text.encode("utf-8"))
+        renderer = QSvgRenderer(data)
+        if not renderer.isValid():
+            return QPixmap()
+        image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        painter = QPainter(image)
+        renderer.render(painter)
+        painter.end()
+        return QPixmap.fromImage(image)
+
+    def _apply_nav_theme(self, dark: bool):
+        """Explicitly re-apply nav bar styles so sizes never change between themes."""
+        if dark:
+            nav_bg       = "background: #181825; border-bottom: 1px solid #45475a;"
+            title_style  = "color: #89b4fa; font-size: 20px; font-weight: 700; text-decoration: none;"
+            user_style   = "color: #a6adc8; font-size: 12px; font-weight: 500; margin-left: 16px; margin-right: 8px; text-decoration: none;"
+            inactive_lbl = "font-size: 10px; color: #a6adc8; margin-top: 0px; text-decoration: none; border: none;"
+        else:
+            nav_bg       = "background: #f8f9fa; border-bottom: 1px solid #dee2e6;"
+            title_style  = "color: #007bff; font-size: 20px; font-weight: 700; text-decoration: none;"
+            user_style   = "color: #495057; font-size: 12px; font-weight: 500; margin-left: 16px; margin-right: 8px; text-decoration: none;"
+            inactive_lbl = "font-size: 10px; color: #495057; margin-top: 0px; text-decoration: none; border: none;"
+
+        if hasattr(self, "nav_bar"):
+            self.nav_bar.setFixedHeight(78)
+            self.nav_bar.setStyleSheet(f"QWidget#navBar {{ {nav_bg} }}")
+        if hasattr(self, "title_icon_container"):
+            self.title_icon_container.setFixedSize(165, 70)
+            self.title_icon_container.setStyleSheet("background: transparent;")
+        if hasattr(self, "title_label"):
+            self.title_label.setFixedWidth(118)
+            self.title_label.setStyleSheet(title_style)
+            title_font = QFont("Segoe UI Variable", 14)
+            title_font.setBold(True)
+            title_font.setUnderline(False)
+            self.title_label.setFont(title_font)
+        if hasattr(self, "nav_icon_label"):
+            self.nav_icon_label.setFixedSize(38, 38)
+            self.nav_icon_label.setAlignment(Qt.AlignCenter)
+            self.nav_icon_label.setStyleSheet("background: transparent;")
+        if hasattr(self, "user_info_label"):
+            self.user_info_label.setStyleSheet(user_style)
+
+        # Transparent container so nav-bar background always shows through
+        # Also re-assert fixed sizes so layout cannot shift
+        if hasattr(self, "nav_widgets"):
+            for w in self.nav_widgets:
+                w.setFixedSize(60, 66)
+                w.setStyleSheet("QWidget { background: transparent; }")
+
+        # Re-apply button QSS + fresh QFont so the cascade can never change the emoji size
+        btn_font = QFont("Segoe UI Variable", 14)
+        btn_font.setUnderline(False)
+        btn_font.setStrikeOut(False)
+        if hasattr(self, "nav_buttons"):
+            for btn in self.nav_buttons:
+                btn.setFixedSize(50, 40)
+                if btn.isEnabled():
+                    btn.setStyleSheet(self.get_nav_button_style(icon_only=True))
+                    btn.setFont(btn_font)
+
+        # Re-apply label QSS + fresh QFont
+        lbl_font = QFont("Segoe UI Variable", 8)
+        lbl_font.setUnderline(False)
+        lbl_font.setStrikeOut(False)
+        if hasattr(self, "nav_labels"):
+            for lbl in self.nav_labels:
+                lbl.setStyleSheet(inactive_lbl)
+                lbl.setFont(lbl_font)
+
+    def _update_nav_icon(self, dark: bool):
+        """Re-render the nav bar icon to match the current theme."""
+        if not hasattr(self, "nav_icon_label") or not hasattr(self, "_icon_path"):
+            return
+        color = "#cdd6f4" if dark else "#007bff"
+        pixmap = self._load_svg_pixmap_colored(self._icon_path, color, 256).scaled(
+            QSize(38, 38), Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        if not pixmap.isNull():
+            self.nav_icon_label.setPixmap(pixmap)
 
     # Sidebar removed; navigation is now in the top bar
 
@@ -241,59 +378,56 @@ class EyeShieldApp(QMainWindow):
                 QPushButton {
                     color: #89b4fa;
                     text-align: center;
-                    padding: 7px 9px;
+                    padding: 4px 0px;
                     border: 1px solid transparent;
                     border-radius: 8px;
                     font-size: 18px;
                     font-weight: 500;
-                    margin: 2px 6px;
-                    min-width: 40px;
-                    min-height: 40px;
                     background: #313244;
+                    text-decoration: none;
                 }
                 QPushButton:hover { background: #3a3a4f; }
+                QPushButton:focus { outline: none; border: 1px solid transparent; }
             """
             inactive_btn_style = """
                 QPushButton {
                     color: #a6adc8;
                     text-align: center;
-                    padding: 7px 9px;
+                    padding: 4px 0px;
                     border: 1px solid transparent;
                     border-radius: 8px;
                     font-size: 18px;
                     font-weight: 500;
-                    margin: 2px 6px;
-                    min-width: 40px;
-                    min-height: 40px;
                     background: transparent;
+                    text-decoration: none;
                 }
                 QPushButton:hover {
                     background: #45475a;
                     color: #89b4fa;
                 }
+                QPushButton:focus { outline: none; border: 1px solid transparent; }
             """
-            active_label = "font-size: 11px; color: #89b4fa; margin-top: 0px;"
-            inactive_label = "font-size: 11px; color: #a6adc8; margin-top: 0px;"
+            active_label = "font-size: 10px; color: #89b4fa; margin-top: 0px; text-decoration: none; border: none;"
+            inactive_label = "font-size: 10px; color: #a6adc8; margin-top: 0px; text-decoration: none; border: none;"
         else:
             active_btn_style = """
                 QPushButton {
                     color: #007bff;
                     text-align: center;
-                    padding: 7px 9px;
+                    padding: 4px 0px;
                     border: 1px solid transparent;
                     border-radius: 8px;
                     font-size: 18px;
                     font-weight: 500;
-                    margin: 2px 6px;
-                    min-width: 40px;
-                    min-height: 40px;
                     background: #e8f0fe;
+                    text-decoration: none;
                 }
                 QPushButton:hover { background: #dbe4f8; }
+                QPushButton:focus { outline: none; border: 1px solid transparent; }
             """
             inactive_btn_style = self.get_nav_button_style(icon_only=True)
-            active_label = "font-size: 11px; color: #007bff; margin-top: 0px;"
-            inactive_label = "font-size: 11px; color: #495057; margin-top: 0px;"
+            active_label = "font-size: 10px; color: #007bff; margin-top: 0px; text-decoration: none; border: none;"
+            inactive_label = "font-size: 10px; color: #495057; margin-top: 0px; text-decoration: none; border: none;"
 
         for i, btn in enumerate(self.nav_buttons):
             if i == index:
@@ -311,33 +445,57 @@ class EyeShieldApp(QMainWindow):
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance()
 
+        # Widgets that belong to the nav bar — we manage these explicitly in
+        # _apply_nav_theme so they must never be wiped or blindly restored.
+        nav_protected = set()
+        if hasattr(self, "nav_bar"):
+            nav_protected.add(id(self.nav_bar))
+            for w in self.nav_bar.findChildren(QWidget):
+                nav_protected.add(id(w))
+
         if theme == "Dark":
             if self._dark_mode:
                 return
             self._dark_mode = True
-            # Save and clear all local stylesheets so app-level takes over
+            # Lock nav sizes BEFORE the global stylesheet can affect them
+            self._apply_nav_theme(True)
             self._saved_styles = {}
             for widget in self.findChildren(QWidget):
+                if id(widget) in nav_protected:
+                    continue
                 ss = widget.styleSheet()
                 if ss:
                     self._saved_styles[id(widget)] = (widget, ss)
                     widget.setStyleSheet("")
             app.setStyleSheet(DARK_STYLESHEET)
+            # Re-apply after stylesheet to ensure our values win
+            self._apply_nav_theme(True)
         else:
             if not self._dark_mode:
                 return
             self._dark_mode = False
+            # Lock nav sizes BEFORE clearing global stylesheet
+            self._apply_nav_theme(False)
             app.setStyleSheet("")
-            # Restore original local stylesheets
             for _, (widget, ss) in self._saved_styles.items():
                 try:
                     widget.setStyleSheet(ss)
                 except RuntimeError:
-                    pass  # widget was deleted
+                    pass
             self._saved_styles = {}
+            # Re-apply after restore
+            self._apply_nav_theme(False)
+
+        # Force layout recalculation on nav bar
+        if hasattr(self, "nav_bar"):
+            self.nav_bar.updateGeometry()
+            self.nav_bar.update()
 
         current_idx = self.pages.currentIndex()
         self._set_active_nav(current_idx)
+
+        # Update nav icon for the new theme
+        self._update_nav_icon(self._dark_mode)
 
         # Refresh quote label with correct accent color
         if hasattr(self, 'quote_label'):
@@ -675,22 +833,21 @@ class EyeShieldApp(QMainWindow):
                 QPushButton {
                     color: #495057;
                     text-align: center;
-                    padding: 7px 9px;
+                    padding: 4px 0px;
                     border: 1px solid transparent;
                     border-radius: 8px;
                     font-size: 18px;
                     font-weight: 500;
-                    margin: 2px 6px;
-                    min-width: 40px;
-                    min-height: 40px;
                     background: transparent;
+                    text-decoration: none;
                 }
                 QPushButton:hover {
                     background: #e9ecef;
                     color: #007bff;
                 }
                 QPushButton:focus {
-                    border: 1px solid #0d6efd;
+                    outline: none;
+                    border: 1px solid transparent;
                 }
             """
         else:
@@ -703,7 +860,6 @@ class EyeShieldApp(QMainWindow):
                     border-radius: 6px;
                     font-size: 14px;
                     font-weight: 500;
-                    margin: 2px 15px;
                     background: transparent;
                 }
                 QPushButton:hover {
@@ -711,6 +867,7 @@ class EyeShieldApp(QMainWindow):
                     color: #007bff;
                 }
                 QPushButton:focus {
-                    border: 1px solid #0d6efd;
+                    outline: none;
+                    border: none;
                 }
             """

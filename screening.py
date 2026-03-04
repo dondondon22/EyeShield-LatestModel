@@ -52,7 +52,7 @@ class ScreeningPage(QWidget):
                 background: #f8f9fa;
                 color: #212529;
                 font-size: 13px;
-                font-family: "Segoe UI", "Inter", "Arial";
+                font-family: "Calibri", "Inter", "Arial";
             }
             QGroupBox {
                 background: #ffffff;
@@ -120,7 +120,7 @@ class ScreeningPage(QWidget):
                 font-weight: 700;
                 color: #007bff;
                 letter-spacing: 0.2px;
-                font-family: "Segoe UI", "Inter", "Arial";
+                font-family: "Calibri", "Inter", "Arial";
             }
             QLabel#statusLabel {
                 color: #495057;
@@ -420,7 +420,7 @@ class ScreeningPage(QWidget):
         layout.setSpacing(15)
 
         title = QLabel("Step 1: Patient Information")
-        title_font = QFont("Segoe UI", 16, QFont.Weight.Bold)
+        title_font = QFont("Calibri", 16, QFont.Weight.Bold)
         title.setFont(title_font)
         title.setObjectName("pageHeader")
         layout.addWidget(title)
@@ -564,7 +564,7 @@ class ScreeningPage(QWidget):
         layout.setSpacing(15)
 
         title = QLabel("Step 2: Image Analysis")
-        title_font = QFont("Segoe UI", 16, QFont.Weight.Bold)
+        title_font = QFont("Calibri", 16, QFont.Weight.Bold)
         title.setFont(title_font)
         title.setObjectName("pageHeader")
         layout.addWidget(title)
@@ -597,7 +597,7 @@ class ScreeningPage(QWidget):
         results_group = QGroupBox("Results")
         results_layout = QFormLayout()
         self.r_class = QLabel("—")
-        self.r_class.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        self.r_class.setFont(QFont("Calibri", 16, QFont.Weight.Bold))
         results_layout.addRow("Classification:", self.r_class)
         self.r_conf = QLabel("—")
         results_layout.addRow("Confidence:", self.r_conf)
@@ -830,7 +830,7 @@ class ResultsWindow(QWidget):
         layout = QVBoxLayout(self)
 
         self.title_label = QLabel("Results")
-        self.title_label.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        self.title_label.setFont(QFont("Calibri", 16, QFont.Weight.Bold))
         self.title_label.setObjectName("pageHeader")
         layout.addWidget(self.title_label)
 
