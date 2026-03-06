@@ -3,6 +3,7 @@ Dashboard module for EyeShield EMR application.
 Contains main application window and dashboard functionality.
 """
 
+import os
 import random
 import sqlite3
 from datetime import datetime
@@ -34,17 +35,18 @@ class EyeShieldApp(QMainWindow):
         self.role = role
         self._dark_mode = False
         self._saved_styles = {}
+        self._logging_out = False
 
         self.setWindowTitle("EyeShield – DR Screening")
         self.setMinimumSize(1100, 700)
         self.resize(1400, 860)
 
         # Set app icon
-        import os
         _icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eyeshield_icon.svg")
         self._app_icon_pixmap = self._load_svg_pixmap(_icon_path, 256)
         self._app_icon = QIcon(self._app_icon_pixmap)
         self.setWindowIcon(self._app_icon)
+        icons_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
@@ -102,7 +104,7 @@ class EyeShieldApp(QMainWindow):
         nav_layout.addStretch(1)
 
         # Navigation buttons with icons and small text labels below
-        def nav_button_with_label(icon, text):
+        def nav_button_with_label(icon_path, text):
             w = QWidget()
             w.setFixedSize(60, 66)
             w.setStyleSheet("QWidget { background: transparent; }")
@@ -110,13 +112,11 @@ class EyeShieldApp(QMainWindow):
             v.setContentsMargins(0, 2, 0, 2)
             v.setSpacing(2)
 
-            btn = QPushButton(icon)
+            btn = QPushButton("")
+            btn.setProperty("navIconPath", icon_path)
             btn.setStyleSheet(self.get_nav_button_style(icon_only=True))
             btn.setFixedSize(50, 40)
-            btn_font = QFont("Segoe UI Variable", 14)
-            btn_font.setUnderline(False)
-            btn_font.setStrikeOut(False)
-            btn.setFont(btn_font)
+            btn.setIconSize(QSize(24, 24))
 
             label = QLabel(text)
             label.setAlignment(Qt.AlignHCenter)
@@ -132,19 +132,19 @@ class EyeShieldApp(QMainWindow):
             return w, btn, label
 
         navs = [
-            ("📊", "Dashboard"),
-            ("🩺", "Screening"),
-            ("📷", "Camera"),
-            ("📄", "Reports"),
-            ("👥", "Users"),
-            ("⚙️", "Settings"),
-            ("❓", "Help")
+            (self._resolve_existing_path(os.path.join(icons_dir, "dashboard.svg"), os.path.join(icons_dir, "dasboard.svg")), "Dashboard"),
+            (self._resolve_existing_path(os.path.join(icons_dir, "screening.svg")), "Screening"),
+            (self._resolve_existing_path(os.path.join(icons_dir, "camera.svg")), "Camera"),
+            (self._resolve_existing_path(os.path.join(icons_dir, "reports.svg")), "Reports"),
+            (self._resolve_existing_path(os.path.join(icons_dir, "users.svg")), "Users"),
+            (self._resolve_existing_path(os.path.join(icons_dir, "settings.svg")), "Settings"),
+            (self._resolve_existing_path(os.path.join(icons_dir, "help.svg")), "Help"),
         ]
         nav_widgets = []
         nav_buttons = []
         nav_labels = []
-        for icon, text in navs:
-            w, btn, label = nav_button_with_label(icon, text)
+        for icon_path, text in navs:
+            w, btn, label = nav_button_with_label(icon_path, text)
             nav_layout.addWidget(w)
             nav_layout.addStretch(1)
             nav_widgets.append(w)
@@ -155,16 +155,22 @@ class EyeShieldApp(QMainWindow):
         self.nav_labels = nav_labels
         self.nav_widgets = nav_widgets
 
-        # User info on the right
-        user_info = QLabel(f"👤 {self.username} ({self.role})")
+        # User info on the right — styled as a pill badge
+        user_info = QLabel(f"  {self.username}  \u2022  {self.role}  ")
         self.user_info_label = user_info
         user_info.setObjectName("userInfo")
-        user_info.setStyleSheet("color: #495057; font-size: 12px; font-weight: 500; margin-left: 16px; margin-right: 8px; text-decoration: none;")
+        user_info.setStyleSheet(
+            "color: #007bff; background: #e8f0fe; border: 1px solid #b8d0f7;"
+            "border-radius: 12px; font-size: 12px; font-weight: 600;"
+            "padding: 2px 8px; margin-left: 12px; margin-right: 8px;"
+        )
         nav_layout.addWidget(user_info)
 
-        logout_btn = QPushButton("\u23fb")
+        logout_btn = QPushButton("")
+        self.logout_btn = logout_btn
         logout_btn.setObjectName("logoutBtn")
         logout_btn.setFixedSize(44, 44)
+        logout_btn.setIconSize(QSize(20, 20))
         logout_btn.setToolTip("Shutdown / Log out")
         logout_btn.setStyleSheet("""
             QPushButton {
@@ -180,6 +186,8 @@ class EyeShieldApp(QMainWindow):
             QPushButton:hover { background: #c82333; }
             QPushButton:focus { outline: none; border: 1px solid #bb2d3b; }
         """)
+        self._logout_icon_path = self._resolve_existing_path(os.path.join(icons_dir, "logout.svg"))
+        self._update_logout_icon()
         logout_btn.clicked.connect(self.handle_logout)
         nav_layout.addWidget(logout_btn)
 
@@ -266,8 +274,16 @@ class EyeShieldApp(QMainWindow):
                 svg_text = f.read()
         except OSError:
             return QPixmap()
+        svg_text = svg_text.replace('stroke="currentColor"', f'stroke="{color}"')
+        svg_text = svg_text.replace('fill="currentColor"', f'fill="{color}"')
         svg_text = svg_text.replace('stroke="black"', f'stroke="{color}"')
         svg_text = svg_text.replace('fill="black"', f'fill="{color}"')
+        svg_text = svg_text.replace('stroke="#000"', f'stroke="{color}"')
+        svg_text = svg_text.replace('fill="#000"', f'fill="{color}"')
+        svg_text = svg_text.replace('stroke="#000000"', f'stroke="{color}"')
+        svg_text = svg_text.replace('fill="#000000"', f'fill="{color}"')
+        svg_text = svg_text.replace('stroke="#e3e3e3"', f'stroke="{color}"')
+        svg_text = svg_text.replace('fill="#e3e3e3"', f'fill="{color}"')
         svg_text = svg_text.replace('fill="white"', 'fill="transparent"')
         data = QByteArray(svg_text.encode("utf-8"))
         renderer = QSvgRenderer(data)
@@ -280,17 +296,69 @@ class EyeShieldApp(QMainWindow):
         painter.end()
         return QPixmap.fromImage(image)
 
+    @staticmethod
+    def _resolve_existing_path(*paths: str) -> str:
+        """Return the first existing path, or the first candidate as fallback."""
+        for path in paths:
+            if path and os.path.exists(path):
+                return path
+        return paths[0] if paths else ""
+
+    def _set_button_svg_icon(self, button: QPushButton, svg_path: str, color: str, size: QSize):
+        """Apply a recolored SVG icon to a button."""
+        if not svg_path:
+            button.setIcon(QIcon())
+            return
+        pixmap = self._load_svg_pixmap_colored(svg_path, color, 256)
+        if pixmap.isNull():
+            button.setIcon(QIcon())
+            return
+        button.setIcon(QIcon(pixmap))
+        button.setIconSize(size)
+
+    def _refresh_nav_button_icons(self, active_index: int):
+        """Recolor navigation SVG icons to match active/inactive and theme state."""
+        if not hasattr(self, "nav_buttons"):
+            return
+        dark = getattr(self, "_dark_mode", False)
+        active_color = "#89b4fa" if dark else "#007bff"
+        inactive_color = "#a6adc8" if dark else "#495057"
+        disabled_color = "#6c7086" if dark else "#adb5bd"
+        icon_size = QSize(24, 24)
+        for i, btn in enumerate(self.nav_buttons):
+            icon_path = btn.property("navIconPath") or ""
+            if not btn.isEnabled():
+                color = disabled_color
+            elif i == active_index:
+                color = active_color
+            else:
+                color = inactive_color
+            self._set_button_svg_icon(btn, icon_path, color, icon_size)
+
+    def _update_logout_icon(self):
+        """Render the logout SVG icon using white for the red button."""
+        if hasattr(self, "logout_btn"):
+            self._set_button_svg_icon(self.logout_btn, getattr(self, "_logout_icon_path", ""), "#ffffff", QSize(20, 20))
+
     def _apply_nav_theme(self, dark: bool):
         """Explicitly re-apply nav bar styles so sizes never change between themes."""
         if dark:
             nav_bg       = "background: #181825; border-bottom: 1px solid #45475a;"
             title_style  = "color: #89b4fa; font-size: 20px; font-weight: 700; text-decoration: none;"
-            user_style   = "color: #a6adc8; font-size: 12px; font-weight: 500; margin-left: 16px; margin-right: 8px; text-decoration: none;"
+            user_style   = (
+                "color: #cdd6f4; background: #313244; border: 1px solid #45475a;"
+                "border-radius: 12px; font-size: 12px; font-weight: 600;"
+                "padding: 2px 8px; margin-left: 12px; margin-right: 8px;"
+            )
             inactive_lbl = "font-size: 10px; color: #a6adc8; margin-top: 0px; text-decoration: none; border: none;"
         else:
             nav_bg       = "background: #f8f9fa; border-bottom: 1px solid #dee2e6;"
             title_style  = "color: #007bff; font-size: 20px; font-weight: 700; text-decoration: none;"
-            user_style   = "color: #495057; font-size: 12px; font-weight: 500; margin-left: 16px; margin-right: 8px; text-decoration: none;"
+            user_style   = (
+                "color: #007bff; background: #e8f0fe; border: 1px solid #b8d0f7;"
+                "border-radius: 12px; font-size: 12px; font-weight: 600;"
+                "padding: 2px 8px; margin-left: 12px; margin-right: 8px;"
+            )
             inactive_lbl = "font-size: 10px; color: #495057; margin-top: 0px; text-decoration: none; border: none;"
 
         if hasattr(self, "nav_bar"):
@@ -320,7 +388,7 @@ class EyeShieldApp(QMainWindow):
                 w.setFixedSize(60, 66)
                 w.setStyleSheet("QWidget { background: transparent; }")
 
-        # Re-apply button QSS + fresh QFont so the cascade can never change the emoji size
+        # Re-apply button QSS so nav buttons stay visually consistent across theme switches
         btn_font = QFont("Segoe UI Variable", 14)
         btn_font.setUnderline(False)
         btn_font.setStrikeOut(False)
@@ -330,6 +398,9 @@ class EyeShieldApp(QMainWindow):
                 if btn.isEnabled():
                     btn.setStyleSheet(self.get_nav_button_style(icon_only=True))
                     btn.setFont(btn_font)
+            active_index = self.pages.currentIndex() if hasattr(self, "pages") else 0
+            self._refresh_nav_button_icons(active_index)
+        self._update_logout_icon()
 
         # Re-apply label QSS + fresh QFont
         lbl_font = QFont("Segoe UI Variable", 8)
@@ -381,7 +452,7 @@ class EyeShieldApp(QMainWindow):
                     padding: 4px 0px;
                     border: 1px solid transparent;
                     border-radius: 8px;
-                    font-size: 18px;
+                    font-size: 22px;
                     font-weight: 500;
                     background: #313244;
                     text-decoration: none;
@@ -396,7 +467,7 @@ class EyeShieldApp(QMainWindow):
                     padding: 4px 0px;
                     border: 1px solid transparent;
                     border-radius: 8px;
-                    font-size: 18px;
+                    font-size: 22px;
                     font-weight: 500;
                     background: transparent;
                     text-decoration: none;
@@ -417,7 +488,7 @@ class EyeShieldApp(QMainWindow):
                     padding: 4px 0px;
                     border: 1px solid transparent;
                     border-radius: 8px;
-                    font-size: 18px;
+                    font-size: 22px;
                     font-weight: 500;
                     background: #e8f0fe;
                     text-decoration: none;
@@ -439,6 +510,7 @@ class EyeShieldApp(QMainWindow):
                 label.setStyleSheet(active_label)
             elif self.nav_buttons[i].isEnabled():
                 label.setStyleSheet(inactive_label)
+        self._refresh_nav_button_icons(index)
 
     def apply_theme(self, theme: str):
         """Apply theme across the entire application by clearing local stylesheets."""
@@ -501,6 +573,23 @@ class EyeShieldApp(QMainWindow):
         if hasattr(self, 'quote_label'):
             self.quote_label.setText(self.get_medical_quote(dark=self._dark_mode))
 
+    def closeEvent(self, event):
+        """Ask for confirmation before closing the application."""
+        if getattr(self, '_logging_out', False):
+            event.accept()
+            return
+        reply = QMessageBox.question(
+            self,
+            "Quit EyeShield",
+            "Are you sure you want to quit EyeShield?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            event.accept()
+        else:
+            event.ignore()
+
     def handle_logout(self):
         reply = QMessageBox.question(
             self,
@@ -512,6 +601,7 @@ class EyeShieldApp(QMainWindow):
             return
 
         from login import LoginWindow
+        self._logging_out = True
         self.login = LoginWindow()
         self.login.show()
         self.close()
@@ -836,7 +926,7 @@ class EyeShieldApp(QMainWindow):
                     padding: 4px 0px;
                     border: 1px solid transparent;
                     border-radius: 8px;
-                    font-size: 18px;
+                    font-size: 22px;
                     font-weight: 500;
                     background: transparent;
                     text-decoration: none;
