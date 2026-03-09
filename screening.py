@@ -369,6 +369,14 @@ class ScreeningPage(QWidget):
             QPushButton#primaryAction:hover {
                 background: #0b5ed7;
             }
+            QPushButton#secondaryAction {
+                background: #ffffff;
+                color: #0d6efd;
+                border: 1px solid #0d6efd;
+            }
+            QPushButton#secondaryAction:hover {
+                background: #e8f0fe;
+            }
             QPushButton#dangerAction {
                 background: #ffffff;
                 color: #dc3545;
@@ -468,20 +476,10 @@ class ScreeningPage(QWidget):
         self.p_dob.setPlaceholderText("dd/mm/yyyy")
         self.p_dob.setMaxLength(10)
         self.p_dob.setMinimumHeight(34)
-        self._dob_default_style = """
-            QLineEdit {
-                color: #212529;
-                background: #ffffff;
-                border: 1px solid #ced4da;
-                border-radius: 8px;
-                padding: 8px;
-            }
-        """
+        self._dob_default_style = ""
         self._dob_invalid_style = """
             QLineEdit {
-                color: #212529;
-                background: #fff5f5;
-                border: 1px solid #dc3545;
+                border: 1.5px solid #dc3545;
                 border-radius: 8px;
                 padding: 8px;
             }
@@ -1045,6 +1043,32 @@ class ScreeningPage(QWidget):
             self.image_label.setPixmap(pixmap)
             self.btn_analyze.setEnabled(True)
 
+    def screen_another_image(self):
+        """Pick a new image from the results page, re-run analysis, update results in place."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Fundus Image", "", "Images (*.jpg *.png *.jpeg)"
+        )
+        if not path:
+            return
+        self.current_image = path
+        # Update the upload panel too so it stays in sync
+        pixmap = QPixmap(path).scaled(
+            450, 400,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.image_label.setPixmap(pixmap)
+        self.btn_analyze.setEnabled(True)
+        # Re-run analysis (placeholder — replace with real model call when ready)
+        self.last_result_class = "No DR Detected"
+        self.last_result_conf = "Confidence: 93.8%"
+        self.results_page.set_results(
+            self.p_name.text(),
+            path,
+            self.last_result_class,
+            self.last_result_conf,
+        )
+
     def open_results_window(self):
         if not self._validate_patient_basics():
             return
@@ -1236,6 +1260,14 @@ class ResultsWindow(QWidget):
         self.btn_save.clicked.connect(self.save_patient)
         action_layout.addWidget(self.btn_save)
 
+        self.btn_screen_another = QPushButton("Screen Another Image")
+        self.btn_screen_another.setObjectName("secondaryAction")
+        self.btn_screen_another.setMinimumHeight(42)
+        self.btn_screen_another.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogStart))
+        self.btn_screen_another.setIconSize(QSize(18, 18))
+        self.btn_screen_another.clicked.connect(self._on_screen_another)
+        action_layout.addWidget(self.btn_screen_another)
+
         self.btn_new = QPushButton("New Patient")
         self.btn_new.setMinimumHeight(42)
         self.btn_new.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder))
@@ -1319,6 +1351,7 @@ class ResultsWindow(QWidget):
     def go_back(self):
         if self.parent_page and hasattr(self.parent_page, "stacked_widget"):
             self.parent_page.stacked_widget.setCurrentIndex(0)
+
     def save_patient(self):
         if self.parent_page and hasattr(self.parent_page, "save_screening"):
             self.parent_page.save_screening()
@@ -1326,3 +1359,7 @@ class ResultsWindow(QWidget):
     def new_patient(self):
         if self.parent_page and hasattr(self.parent_page, "reset_screening"):
             self.parent_page.reset_screening()
+
+    def _on_screen_another(self):
+        if self.parent_page and hasattr(self.parent_page, "screen_another_image"):
+            self.parent_page.screen_another_image()
