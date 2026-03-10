@@ -37,6 +37,7 @@ class EyeShieldApp(QMainWindow):
         self._dark_mode = False
         self._saved_styles = {}
         self._logging_out = False
+        self._current_language = "English"
 
         self.setWindowTitle("EyeShield – DR Screening")
         self.setMinimumSize(1100, 700)
@@ -173,6 +174,7 @@ class EyeShieldApp(QMainWindow):
         nav_widgets = []
         nav_buttons = []
         nav_labels = []
+        nav_label_originals = []
         for nav_item in navs:
             if nav_item["requires_admin"] and self.role != "admin":
                 continue
@@ -184,10 +186,12 @@ class EyeShieldApp(QMainWindow):
             nav_widgets.append(w)
             nav_buttons.append(btn)
             nav_labels.append(label)
+            nav_label_originals.append(nav_item["label"])
 
         self.nav_buttons = nav_buttons
         self.nav_labels = nav_labels
         self.nav_widgets = nav_widgets
+        self._nav_label_originals = nav_label_originals
 
         # User info on the right — styled as a pill badge
         user_info = QLabel(f"  {self.username}  \u2022  {self.role}  ")
@@ -280,6 +284,11 @@ class EyeShieldApp(QMainWindow):
         saved_theme = self.settings_page.theme_combo.currentText()
         if saved_theme == "Dark":
             self.apply_theme("Dark")
+
+        # Apply saved language to all tabs
+        saved_lang = self.settings_page.lang_combo.currentText()
+        if saved_lang != "English":
+            self.apply_language(saved_lang)
 
     @staticmethod
     def _load_svg_pixmap(svg_path: str, size: int = 64) -> QPixmap:
@@ -606,6 +615,76 @@ class EyeShieldApp(QMainWindow):
         # Refresh entire dashboard with correct theme colors
         self.refresh_dashboard()
 
+    def apply_language(self, language: str):
+        """Apply the selected language to all tabs and the navigation bar."""
+        from translations import get_pack
+        self._current_language = language
+        pack = get_pack(language)
+
+        # Navigation bar labels
+        _nav_key_map = {
+            "Dashboard": "nav_dashboard",
+            "Screening": "nav_screening",
+            "Camera": "nav_camera",
+            "Reports": "nav_reports",
+            "Users": "nav_users",
+            "Settings": "nav_settings",
+            "Help": "nav_help",
+        }
+        if hasattr(self, "nav_labels") and hasattr(self, "_nav_label_originals"):
+            for label, orig in zip(self.nav_labels, self._nav_label_originals):
+                key = _nav_key_map.get(orig, "")
+                if key:
+                    label.setText(pack.get(key, orig))
+
+        # Dashboard welcome label
+        if hasattr(self, "welcome_label"):
+            self.welcome_label.setText(f"{pack['dash_welcome']}, {self.username}")
+
+        # Dashboard section headers
+        if hasattr(self, "_dash_activity_title_lbl"):
+            self._dash_activity_title_lbl.setText(pack["dash_recent"])
+        if hasattr(self, "_dash_actions_title_lbl"):
+            self._dash_actions_title_lbl.setText(pack["dash_actions_title"])
+        if hasattr(self, "_dash_insight_title_lbl"):
+            self._dash_insight_title_lbl.setText(pack["dash_insight_title"])
+
+        # Dashboard quick-action buttons
+        if hasattr(self, "_dash_btn_new"):
+            self._dash_btn_new.setText(pack["dash_btn_new"])
+        if hasattr(self, "_dash_btn_reports"):
+            self._dash_btn_reports.setText(pack["dash_btn_reports"])
+
+        # Dashboard empty-state label
+        if hasattr(self, "empty_activity_label"):
+            self.empty_activity_label.setText(pack["dash_empty"])
+
+        # KPI card title labels (stored with objectName pattern)
+        kpi_map = {
+            "kpiTotal": "dash_kpi_total",
+            "kpiFlagged": "dash_kpi_flagged",
+            "kpiPending": "dash_kpi_pending",
+            "kpiConf": "dash_kpi_conf",
+        }
+        for obj_name, key in kpi_map.items():
+            title_w = self.findChild(QLabel, f"{obj_name}_title")
+            if title_w:
+                title_w.setText(pack[key])
+
+        # Propagate to all sub-pages
+        for page in (
+            self.camera_page,
+            self.screening_page,
+            self.reports_page,
+            self.users_page,
+            self.help_support_page,
+        ):
+            if hasattr(page, "apply_language"):
+                page.apply_language(language)
+
+        # Refresh dashboard dynamic content
+        self.refresh_dashboard()
+
     def closeEvent(self, event):
         """Ask for confirmation before closing the application."""
         if getattr(self, '_logging_out', False):
@@ -779,12 +858,12 @@ class EyeShieldApp(QMainWindow):
         activity_v.setSpacing(8)
 
         activity_header = QHBoxLayout()
-        activity_title = QLabel("RECENT SCREENINGS")
-        activity_title.setStyleSheet(
+        self._dash_activity_title_lbl = QLabel("RECENT SCREENINGS")
+        self._dash_activity_title_lbl.setStyleSheet(
             "color: #6c757d; font-size: 11px; font-weight: 700;"
             "letter-spacing: 0.5px; text-transform: uppercase; background: transparent;"
         )
-        activity_header.addWidget(activity_title)
+        activity_header.addWidget(self._dash_activity_title_lbl)
         activity_header.addStretch()
 
         self.activity_count_label = QLabel("")
@@ -856,12 +935,12 @@ class EyeShieldApp(QMainWindow):
         actions_v.setContentsMargins(16, 12, 16, 12)
         actions_v.setSpacing(8)
 
-        actions_title = QLabel("QUICK ACTIONS")
-        actions_title.setStyleSheet(
+        self._dash_actions_title_lbl = QLabel("QUICK ACTIONS")
+        self._dash_actions_title_lbl.setStyleSheet(
             "color: #6c757d; font-size: 11px; font-weight: 700;"
             "letter-spacing: 0.5px; background: transparent;"
         )
-        actions_v.addWidget(actions_title)
+        actions_v.addWidget(self._dash_actions_title_lbl)
 
         btn_new_screening = QPushButton("  New Screening")
         btn_new_screening.setCursor(Qt.PointingHandCursor)
@@ -907,8 +986,8 @@ class EyeShieldApp(QMainWindow):
         insight_v = QVBoxLayout(insight_card)
         insight_v.setContentsMargins(16, 12, 16, 12)
         insight_v.setSpacing(6)
-        insight_title = QLabel("CLINICAL INSIGHT")
-        insight_title.setStyleSheet(
+        self._dash_insight_title_lbl = QLabel("CLINICAL INSIGHT")
+        self._dash_insight_title_lbl.setStyleSheet(
             "color: #6c757d; font-size: 11px; font-weight: 700;"
             "letter-spacing: 0.5px; background: transparent;"
         )
@@ -916,7 +995,7 @@ class EyeShieldApp(QMainWindow):
         self.insight_label.setObjectName("insightLabel")
         self.insight_label.setStyleSheet("font-size: 12px; color: #495057; background: transparent;")
         self.insight_label.setWordWrap(True)
-        insight_v.addWidget(insight_title)
+        insight_v.addWidget(self._dash_insight_title_lbl)
         insight_v.addWidget(self.insight_label)
         insight_v.addStretch()
         sidebar_v.addWidget(insight_card)
@@ -929,6 +1008,9 @@ class EyeShieldApp(QMainWindow):
 
     def refresh_dashboard(self):
         """Refresh all dashboard widgets with current data and correct theme colors."""
+        from translations import get_pack
+        _lang = getattr(self, "_current_language", "English")
+        _pack = get_pack(_lang)
         dark = getattr(self, "_dark_mode", False)
 
         # ── Theme palette ──
@@ -1052,25 +1134,31 @@ class EyeShieldApp(QMainWindow):
 
         style_kpi("kpiTotal", accent_blue,
                   self.total_screenings_value, self.total_sub,
-                  str(total), "All saved DR screenings")
+                  str(total), _pack["dash_kpi_total_sub"])
 
         flagged_accent = sev_red if high_attention > 0 else text_muted
         style_kpi("kpiFlagged", flagged_accent,
                   self.high_attention_value, self.high_attention_hint,
                   str(high_attention),
-                  "Cases flagged for follow-up" if high_attention > 0 else "No cases flagged")
+                  _pack["dash_flagged_cases"] if high_attention > 0 else _pack["dash_no_flagged"])
 
         style_kpi("kpiPending", sev_amber if pending_count > 0 else text_muted,
                   self.pending_value, self.pending_sub,
                   str(pending_count),
-                  "Awaiting review" if pending_count > 0 else "All reviews complete")
+                  _pack["dash_awaiting"] if pending_count > 0 else _pack["dash_all_reviewed"])
 
-        conf_display = f"{avg_conf:.1f}%" if avg_conf is not None else "—"
+        _n_conf = len(confidence_values)
+        conf_display = f"{avg_conf:.1f}%" if avg_conf is not None else "\u2014"
+        if confidence_values:
+            _conf_sub = _pack["dash_conf_across"].format(n=_n_conf)
+            if _lang == "English" and _n_conf != 1:
+                _conf_sub += "s"
+        else:
+            _conf_sub = _pack["dash_no_conf"]
         style_kpi("kpiConf", accent_blue,
                   self.avg_confidence_value, self.conf_sub,
                   conf_display,
-                  f"Across {len(confidence_values)} record{'s' if len(confidence_values) != 1 else ''}"
-                  if confidence_values else "No confidence data yet")
+                  _conf_sub)
 
         # Confidence progress bar
         if hasattr(self, "conf_bar_track"):
@@ -1120,13 +1208,11 @@ class EyeShieldApp(QMainWindow):
                 )
 
             # Activity title
-            for lbl in (self.findChild(QWidget, "activityCard") or QWidget()).findChildren(QLabel):
-                if lbl.text() == "RECENT SCREENINGS":
-                    lbl.setStyleSheet(
-                        f"color: {text_secondary}; font-size: 11px; font-weight: 700;"
-                        "letter-spacing: 0.5px; text-transform: uppercase; background: transparent;"
-                    )
-                    break
+            if hasattr(self, "_dash_activity_title_lbl"):
+                self._dash_activity_title_lbl.setStyleSheet(
+                    f"color: {text_secondary}; font-size: 11px; font-weight: 700;"
+                    "letter-spacing: 0.5px; text-transform: uppercase; background: transparent;"
+                )
 
             recent = rows[:8]
             if recent:
@@ -1207,15 +1293,15 @@ class EyeShieldApp(QMainWindow):
                 )
 
         # Style section title labels in sidebar
-        for card_name in ("actionsCard", "insightCard"):
-            card = self.findChild(QWidget, card_name)
-            if card:
-                for lbl in card.findChildren(QLabel):
-                    if lbl.text() in ("QUICK ACTIONS", "CLINICAL INSIGHT"):
-                        lbl.setStyleSheet(
-                            f"color: {text_secondary}; font-size: 11px; font-weight: 700;"
-                            "letter-spacing: 0.5px; background: transparent;"
-                        )
+        sidebar_title_style = (
+            f"color: {text_secondary}; font-size: 11px; font-weight: 700;"
+            "letter-spacing: 0.5px; background: transparent;"
+        )
+        for _lbl in filter(None, [
+            getattr(self, "_dash_actions_title_lbl", None),
+            getattr(self, "_dash_insight_title_lbl", None),
+        ]):
+            _lbl.setStyleSheet(sidebar_title_style)
 
         # Quick-action buttons
         if hasattr(self, "_dash_btn_new"):
@@ -1239,17 +1325,23 @@ class EyeShieldApp(QMainWindow):
         # Clinical insight text
         if hasattr(self, "insight_label"):
             if total == 0:
-                insight = "No screenings yet. Run a new screening to see trends here."
+                insight = _pack["dash_no_screenings"]
             elif high_attention > 0:
                 pct = (high_attention / total * 100) if total else 0
-                insight = (
-                    f"{high_attention} of {total} screening{'s' if total != 1 else ''} "
-                    f"({pct:.0f}%) flagged. Prioritize report review."
-                )
+                if _lang == "English":
+                    insight = (
+                        f"{high_attention} of {total} screening{'s' if total != 1 else ''} "
+                        f"({pct:.0f}%) flagged. Prioritize report review."
+                    )
+                else:
+                    insight = f"{high_attention} sa {total} pagsusuri ({pct:.0f}%) ay naka-flag. Unahin ang rebyu ng ulat."
             elif pending_count > 0:
-                insight = f"{pending_count} screening{'s' if pending_count != 1 else ''} pending review. Complete assessments to clear the queue."
+                if _lang == "English":
+                    insight = f"{pending_count} screening{'s' if pending_count != 1 else ''} pending review. Complete assessments to clear the queue."
+                else:
+                    insight = f"{pending_count} pagsusuri ang naghihintay ng rebyu. Kumpletuhin ang mga assessment."
             else:
-                insight = "All screenings reviewed — no action needed. Continue routine monitoring."
+                insight = _pack["dash_insight_all_clear"]
             self.insight_label.setText(insight)
             self.insight_label.setStyleSheet(
                 f"font-size: 12px; color: {text_secondary}; background: transparent;"

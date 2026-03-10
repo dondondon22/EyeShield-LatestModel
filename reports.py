@@ -238,16 +238,16 @@ class ReportsPage(QWidget):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(16)
 
-        title = QLabel("DR Screening Reports")
-        title.setObjectName("pageHeader")
-        title.setStyleSheet("font-size:24px;font-weight:700;color:#007bff;font-family:'Calibri','Inter','Arial';")
-        subtitle = QLabel("Complete diabetic retinopathy screening outcomes from locally saved records")
-        subtitle.setObjectName("pageSubtitle")
-        subtitle.setStyleSheet("font-size:13px;color:#6c757d;")
+        self._rep_title_lbl = QLabel("DR Screening Reports")
+        self._rep_title_lbl.setObjectName("pageHeader")
+        self._rep_title_lbl.setStyleSheet("font-size:24px;font-weight:700;color:#007bff;font-family:'Calibri','Inter','Arial';")
+        self._rep_subtitle_lbl = QLabel("Complete diabetic retinopathy screening outcomes from locally saved records")
+        self._rep_subtitle_lbl.setObjectName("pageSubtitle")
+        self._rep_subtitle_lbl.setStyleSheet("font-size:13px;color:#6c757d;")
 
         top_bar = QHBoxLayout()
         top_bar.setSpacing(8)
-        top_bar.addWidget(title)
+        top_bar.addWidget(self._rep_title_lbl)
         top_bar.addStretch(1)
         self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(self.refresh_report)
@@ -266,13 +266,13 @@ class ReportsPage(QWidget):
         top_bar.addWidget(self.export_btn)
 
         root.addLayout(top_bar)
-        root.addWidget(subtitle)
+        root.addWidget(self._rep_subtitle_lbl)
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("statusLabel")
         root.addWidget(self.status_label)
 
-        controls_group = QGroupBox("Quick Filters")
-        controls_layout = QHBoxLayout(controls_group)
+        self._controls_group = QGroupBox("Quick Filters")
+        controls_layout = QHBoxLayout(self._controls_group)
         controls_layout.setContentsMargins(16, 16, 16, 16)
         controls_layout.setSpacing(12)
 
@@ -292,27 +292,27 @@ class ReportsPage(QWidget):
         self.filtered_count_label.setObjectName("hintLabel")
         controls_layout.addWidget(self.filtered_count_label)
 
-        root.addWidget(controls_group)
+        root.addWidget(self._controls_group)
 
-        stats_group = QGroupBox("Summary")
-        stats_layout = QHBoxLayout(stats_group)
+        self._stats_group = QGroupBox("Summary")
+        stats_layout = QHBoxLayout(self._stats_group)
         stats_layout.setContentsMargins(16, 16, 16, 16)
         stats_layout.setSpacing(16)
 
-        total_card, self.total_label = self._make_stat_card("Total Screenings", "0")
-        unique_card, self.unique_patients_label = self._make_stat_card("Unique Patients", "0")
-        no_dr_card, self.no_dr_label = self._make_stat_card("No DR", "0")
-        review_card, self.review_label = self._make_stat_card("Needs Review", "0")
-        hba1c_card, self.hba1c_label = self._make_stat_card("Avg HbA1c", "0.0%")
+        total_card, self._stat_total_title, self.total_label = self._make_stat_card("Total Screenings", "0")
+        unique_card, self._stat_unique_title, self.unique_patients_label = self._make_stat_card("Unique Patients", "0")
+        no_dr_card, self._stat_no_dr_title, self.no_dr_label = self._make_stat_card("No DR", "0")
+        review_card, self._stat_review_title, self.review_label = self._make_stat_card("Needs Review", "0")
+        hba1c_card, self._stat_hba1c_title, self.hba1c_label = self._make_stat_card("Avg HbA1c", "0.0%")
 
         self._stat_cards = [total_card, unique_card, no_dr_card, review_card, hba1c_card]
         for card in self._stat_cards:
             stats_layout.addWidget(card)
 
-        root.addWidget(stats_group)
+        root.addWidget(self._stats_group)
 
-        results_group = QGroupBox("All Screening Results")
-        results_layout = QVBoxLayout(results_group)
+        self._results_group = QGroupBox("All Screening Results")
+        results_layout = QVBoxLayout(self._results_group)
         results_layout.setContentsMargins(16, 16, 16, 16)
         results_layout.setSpacing(12)
 
@@ -344,7 +344,7 @@ class ReportsPage(QWidget):
         self.results_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         results_layout.addWidget(self.results_table)
 
-        root.addWidget(results_group)
+        root.addWidget(self._results_group)
 
         self.setTabOrder(self.refresh_btn, self.export_btn)
         self.setTabOrder(self.export_btn, self.search_input)
@@ -353,7 +353,7 @@ class ReportsPage(QWidget):
 
         self.refresh_report()
 
-    def _make_stat_card(self, title: str, value: str) -> tuple[QWidget, QLabel]:
+    def _make_stat_card(self, title: str, value: str) -> tuple[QWidget, QLabel, QLabel]:
         container = QWidget()
         container.setObjectName("dashTile")
         container.setStyleSheet("background:#ffffff;border:1px solid #dee2e6;border-radius:8px;")
@@ -370,7 +370,7 @@ class ReportsPage(QWidget):
 
         layout.addWidget(title_label)
         layout.addWidget(value_label)
-        return container, value_label
+        return container, title_label, value_label
 
     def refresh_report(self):
         try:
@@ -703,3 +703,23 @@ class ReportsPage(QWidget):
             self.status_label.setText(f"Exported {len(rows_to_export)} rows to {path}")
         except OSError as err:
             QMessageBox.warning(self, "Export", f"Failed to export summary: {err}")
+
+    def apply_language(self, language: str):
+        from translations import get_pack
+        pack = get_pack(language)
+        self._rep_title_lbl.setText(pack["rep_title"])
+        self._rep_subtitle_lbl.setText(pack["rep_subtitle"])
+        self.refresh_btn.setText(pack["rep_refresh"])
+        self.export_btn.setText(pack["rep_export"])
+        if self.archived_records_btn is not None:
+            self.archived_records_btn.setText(pack["rep_archived"])
+        if self.archive_btn is not None:
+            self.archive_btn.setText(pack["rep_archive_sel"])
+        self._controls_group.setTitle(pack["rep_quick_filters"])
+        self._stats_group.setTitle(pack["rep_summary"])
+        self._results_group.setTitle(pack["rep_all_results"])
+        self._stat_total_title.setText(pack["rep_stat_total"])
+        self._stat_unique_title.setText(pack["rep_stat_unique"])
+        self._stat_no_dr_title.setText(pack["rep_stat_no_dr"])
+        self._stat_review_title.setText(pack["rep_stat_review"])
+        self._stat_hba1c_title.setText(pack["rep_stat_hba1c"])

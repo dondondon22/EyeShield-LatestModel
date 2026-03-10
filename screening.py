@@ -291,6 +291,8 @@ class ScreeningPage(QWidget):
         self.max_dob_date = QDate.currentDate()
         self.last_result_class = "Pending"
         self.last_result_conf = "Pending"
+        self._current_eye_saved = False
+        self._first_eye_result = None
         self.stacked_widget = QStackedWidget()
         self.init_ui()
 
@@ -456,22 +458,22 @@ class ScreeningPage(QWidget):
         grid.setSpacing(12)
         grid.setContentsMargins(16, 16, 16, 16)
         # Patient Info
-        patient_group = QGroupBox("Patient Information")
-        patient_form = QFormLayout()
-        patient_form.setContentsMargins(12, 14, 12, 12)
-        patient_form.setHorizontalSpacing(14)
-        patient_form.setVerticalSpacing(10)
-        patient_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        patient_form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        self._scr_patient_group = QGroupBox("Patient Information")
+        self._scr_patient_form = QFormLayout()
+        self._scr_patient_form.setContentsMargins(12, 14, 12, 12)
+        self._scr_patient_form.setHorizontalSpacing(14)
+        self._scr_patient_form.setVerticalSpacing(10)
+        self._scr_patient_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._scr_patient_form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         self.p_id = QLineEdit()
         self.p_id.setReadOnly(True)
         self.p_id.setMinimumHeight(34)
         self.generate_patient_id()
-        patient_form.addRow("Patient ID:", self.p_id)
+        self._scr_patient_form.addRow("Patient ID:", self.p_id)
         self.p_name = QLineEdit()
         self.p_name.setPlaceholderText("Full name")
         self.p_name.setMinimumHeight(34)
-        patient_form.addRow("Name:", self.p_name)
+        self._scr_patient_form.addRow("Name:", self.p_name)
         self.p_dob = QLineEdit()
         self.p_dob.setPlaceholderText("dd/mm/yyyy")
         self.p_dob.setMaxLength(10)
@@ -486,7 +488,7 @@ class ScreeningPage(QWidget):
         """
         self.p_dob.setStyleSheet(self._dob_default_style)
         self.p_dob.textChanged.connect(self._on_dob_text_changed)
-        patient_form.addRow("Date of Birth:", self.p_dob)
+        self._scr_patient_form.addRow("Date of Birth:", self.p_dob)
         self.p_age = QSpinBox()
         self.p_age.setRange(0, 120)
         self.p_age.setSuffix(" years")
@@ -495,22 +497,26 @@ class ScreeningPage(QWidget):
         self.p_age.setSpecialValueText(" ")
         self.p_age.setValue(0)
         self.p_age.setMinimumHeight(34)
-        patient_form.addRow("Age:", self.p_age)
+        self._scr_patient_form.addRow("Age:", self.p_age)
         self.p_sex = QComboBox()
         self.p_sex.addItems(["", "Male", "Female", "Prefer not to say"])
         self.p_sex.setMinimumHeight(34)
-        patient_form.addRow("Sex:", self.p_sex)
+        self._scr_patient_form.addRow("Sex:", self.p_sex)
         self.p_contact = QLineEdit()
         self.p_contact.setPlaceholderText("Phone or Email")
         self.p_contact.setMinimumHeight(34)
-        patient_form.addRow("Contact:", self.p_contact)
-        patient_group.setLayout(patient_form)
+        self._scr_patient_form.addRow("Contact:", self.p_contact)
+        self.p_eye = QComboBox()
+        self.p_eye.addItems(["", "Right Eye", "Left Eye"])
+        self.p_eye.setMinimumHeight(34)
+        self._scr_patient_form.addRow("Eye Screened:", self.p_eye)
+        self._scr_patient_group.setLayout(self._scr_patient_form)
         # Clinical History
-        clinical_group = QGroupBox("Clinical History")
-        clinical_form = QFormLayout()
+        self._scr_clinical_group = QGroupBox("Clinical History")
+        self._scr_clinical_form = QFormLayout()
         self.diabetes_type = QComboBox()
         self.diabetes_type.addItems(["Select", "Type 1", "Type 2", "Gestational", "Other"])
-        clinical_form.addRow("Diabetes Type:", self.diabetes_type)
+        self._scr_clinical_form.addRow("Diabetes Type:", self.diabetes_type)
         self.diabetes_duration = QSpinBox()
         self.diabetes_duration.setSuffix(" years")
         self.diabetes_duration.setRange(0, 80)
@@ -527,7 +533,7 @@ class ScreeningPage(QWidget):
                 width: 18px;
             }
         """)
-        clinical_form.addRow("Duration:", self.diabetes_duration)
+        self._scr_clinical_form.addRow("Duration:", self.diabetes_duration)
         self.hba1c = QDoubleSpinBox()
         self.hba1c.setRange(4.0, 15.0)
         self.hba1c.setDecimals(1)
@@ -546,7 +552,7 @@ class ScreeningPage(QWidget):
                 width: 18px;
             }
         """)
-        clinical_form.addRow("HbA1c:", self.hba1c)
+        self._scr_clinical_form.addRow("HbA1c:", self.hba1c)
         self.prev_treatment = QCheckBox("Previous DR Treatment")
         self.prev_treatment.setStyleSheet("""
             QCheckBox {
@@ -565,7 +571,7 @@ class ScreeningPage(QWidget):
                 border: 1px solid #0056b3;
             }
         """)
-        clinical_form.addRow("", self.prev_treatment)
+        self._scr_clinical_form.addRow("", self.prev_treatment)
         self.notes = QTextEdit()
         self.notes.setMaximumHeight(80)
         self.notes.setMinimumHeight(80)
@@ -581,10 +587,10 @@ class ScreeningPage(QWidget):
                 border: 1px solid #0d6efd;
             }
         """)
-        clinical_form.addRow("Notes:", self.notes)
-        clinical_group.setLayout(clinical_form)
+        self._scr_clinical_form.addRow("Notes:", self.notes)
+        self._scr_clinical_group.setLayout(self._scr_clinical_form)
         # Image Upload
-        image_group = QGroupBox("Fundus Image Upload")
+        self._scr_image_group = QGroupBox("Fundus Image Upload")
         image_layout = QVBoxLayout()
         self.image_label = QLabel("No image loaded")
         self.image_label.setMinimumSize(450, 400)
@@ -601,11 +607,11 @@ class ScreeningPage(QWidget):
         btn_layout.addWidget(self.btn_upload)
         btn_layout.addWidget(self.btn_clear)
         image_layout.addLayout(btn_layout)
-        image_group.setLayout(image_layout)
+        self._scr_image_group.setLayout(image_layout)
         # Position widgets in grid
-        grid.addWidget(patient_group, 0, 0)
-        grid.addWidget(clinical_group, 1, 0)
-        grid.addWidget(image_group, 0, 1, 2, 1)
+        grid.addWidget(self._scr_patient_group, 0, 0)
+        grid.addWidget(self._scr_clinical_group, 1, 0)
+        grid.addWidget(self._scr_image_group, 0, 1, 2, 1)
         grid.setRowStretch(0, 1)
         grid.setRowStretch(1, 1)
         # Analyze Button at bottom right
@@ -627,7 +633,8 @@ class ScreeningPage(QWidget):
         self.setTabOrder(self.p_name, self.p_dob)
         self.setTabOrder(self.p_dob, self.p_sex)
         self.setTabOrder(self.p_sex, self.p_contact)
-        self.setTabOrder(self.p_contact, self.diabetes_type)
+        self.setTabOrder(self.p_contact, self.p_eye)
+        self.setTabOrder(self.p_eye, self.diabetes_type)
         self.setTabOrder(self.diabetes_type, self.diabetes_duration)
         self.setTabOrder(self.diabetes_duration, self.hba1c)
         self.setTabOrder(self.hba1c, self.prev_treatment)
@@ -1014,6 +1021,7 @@ class ScreeningPage(QWidget):
             self.p_dob.clear()
         self.p_age.setValue(0)
         self.p_sex.setCurrentIndex(0)
+        self.p_eye.setCurrentIndex(0)
         self.diabetes_type.setCurrentIndex(0)
         self.diabetes_duration.setValue(0)
         self.hba1c.setValue(7.0)
@@ -1025,6 +1033,8 @@ class ScreeningPage(QWidget):
         self.image_label.setStyleSheet("border: 2px dashed #ccc; background-color: #f9f9f9;")
         self.last_result_class = "Pending"
         self.last_result_conf = "Pending"
+        self._current_eye_saved = False
+        self._first_eye_result = None
         self.btn_analyze.setEnabled(False)
         self.stacked_widget.setCurrentIndex(0)
 
@@ -1085,13 +1095,17 @@ class ScreeningPage(QWidget):
         if confirm_box.clickedButton() != proceed_button:
             return
         # Show results inside the same window
+        self._current_eye_saved = False
         self.last_result_class = "No DR Detected"
         self.last_result_conf = "Confidence: 93.8%"
+        eye_label = self.p_eye.currentText()
         self.results_page.set_results(
             self.p_name.text(),
             self.current_image,
             self.last_result_class,
             self.last_result_conf,
+            eye_label=eye_label,
+            first_eye_result=self._first_eye_result,
         )
         self.stacked_widget.setCurrentIndex(1)
 
@@ -1102,7 +1116,7 @@ class ScreeningPage(QWidget):
         self.image_label.setStyleSheet("border: 2px dashed #ccc; background-color: #f9f9f9;")
         self.btn_analyze.setEnabled(False)
 
-    def save_screening(self):
+    def save_screening(self, reset_after=True):
         if not self._validate_patient_basics():
             return
         name = self.p_name.text().strip()
@@ -1117,7 +1131,7 @@ class ScreeningPage(QWidget):
         age = self.p_age.value()
         sex = self.p_sex.currentText()
         contact = self.p_contact.text().strip()
-        eye = ""
+        eye = self.p_eye.currentText()
         diabetes_type = self.diabetes_type.currentText()
         duration = self.diabetes_duration.value()
         hba1c = f"{self.hba1c.value():.1f}%"
@@ -1147,7 +1161,79 @@ class ScreeningPage(QWidget):
             QMessageBox.warning(self, "Save Failed", "Unable to save screening record. Please try again.")
             return
 
+        self._current_eye_saved = True
+        if reset_after:
+            self.reset_screening()
+        else:
+            eye_label = eye or "eye"
+            self._first_eye_result = {
+                "eye": eye_label,
+                "result": self.last_result_class,
+                "confidence": self.last_result_conf,
+            }
+            self.results_page.mark_saved(self.p_name.text().strip(), eye_label, self.last_result_class)
+
+    def screen_other_eye(self):
+        """Save the current eye's result and switch to the same patient's other eye."""
+        current_eye = self.p_eye.currentText().strip()
+        opposite_eye = "Left Eye" if current_eye == "Right Eye" else "Right Eye"
+
+        if not self._current_eye_saved:
+            eye_label = current_eye or "current eye"
+            reply = QMessageBox.question(
+                self,
+                "Save Before Switching",
+                f"The screening for the <b>{eye_label}</b> has not been saved yet.\n\n"
+                f"Save it now before screening the {opposite_eye}?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Cancel:
+                return
+            if reply == QMessageBox.StandardButton.Yes:
+                self.save_screening(reset_after=False)
+                if not self._current_eye_saved:
+                    return  # save failed, abort
+
+        # Capture current patient demographics before resetting
+        name = self.p_name.text()
+        dob_text = self.p_dob.text() if not isinstance(self.p_dob, QDateEdit) else ""
+        age = self.p_age.value()
+        sex = self.p_sex.currentText()
+        contact = self.p_contact.text()
+        d_type = self.diabetes_type.currentText()
+        d_dur = self.diabetes_duration.value()
+        hba1c_val = self.hba1c.value()
+        prev = self.prev_treatment.isChecked()
+        notes_text = self.notes.toPlainText()
+
+        # Preserve first eye result across reset so results page can show bilateral comparison
+        saved_first_eye_result = self._first_eye_result
+
+        # Full reset (generates new patient ID, clears everything)
         self.reset_screening()
+
+        # Restore first eye result
+        self._first_eye_result = saved_first_eye_result
+
+        # Restore demographics for the same patient
+        self.p_name.setText(name)
+        if not isinstance(self.p_dob, QDateEdit):
+            self.p_dob.setText(dob_text)
+        self.p_age.setValue(age)
+        self.p_sex.setCurrentText(sex)
+        self.p_contact.setText(contact)
+        self.diabetes_type.setCurrentText(d_type)
+        self.diabetes_duration.setValue(d_dur)
+        self.hba1c.setValue(hba1c_val)
+        self.prev_treatment.setChecked(prev)
+        self.notes.setPlainText(notes_text)
+
+        # Pre-select the other eye
+        self.p_eye.setCurrentText(opposite_eye)
+
+        # Return to intake form — only the image needs to be uploaded
+        self.stacked_widget.setCurrentIndex(0)
 
     def _save_screening_to_db(self, patient_data):
         try:
@@ -1166,6 +1252,37 @@ class ScreeningPage(QWidget):
             return True
         except Exception:
             return False
+
+    def apply_language(self, language: str):
+        from translations import get_pack
+        pack = get_pack(language)
+        self._scr_patient_group.setTitle(pack["scr_patient_info"])
+        self._scr_clinical_group.setTitle(pack["scr_clinical_history"])
+        self._scr_image_group.setTitle(pack["scr_image_upload"])
+        self.btn_upload.setText(pack["scr_upload_btn"])
+        self.btn_clear.setText(pack["scr_clear_btn"])
+        self.btn_analyze.setText(pack["scr_analyze_btn"])
+        patient_labels = [
+            pack["scr_label_pid"], pack["scr_label_name"], pack["scr_label_dob"],
+            pack["scr_label_age"], pack["scr_label_sex"], pack["scr_label_contact"],
+            pack["scr_label_eye"],
+        ]
+        for row, text in enumerate(patient_labels):
+            item = self._scr_patient_form.itemAt(row, QFormLayout.ItemRole.LabelRole)
+            if item and item.widget():
+                item.widget().setText(text)
+        clinical_labels = [
+            pack["scr_label_diabetes"], pack["scr_label_duration"], pack["scr_label_hba1c"],
+            None,
+            pack["scr_label_notes"],
+        ]
+        for row, text in enumerate(clinical_labels):
+            if text is None:
+                continue
+            item = self._scr_clinical_form.itemAt(row, QFormLayout.ItemRole.LabelRole)
+            if item and item.widget():
+                item.widget().setText(text)
+
 class ResultsWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1238,6 +1355,49 @@ class ResultsWindow(QWidget):
         stats_row.addWidget(recommendation_card)
         review_column.addLayout(stats_row)
 
+        # Bilateral comparison card (hidden until second eye is being reviewed)
+        self.bilateral_frame = QFrame()
+        self.bilateral_frame.setObjectName("resultStatCard")
+        bilateral_layout = QVBoxLayout(self.bilateral_frame)
+        bilateral_layout.setContentsMargins(14, 12, 14, 12)
+        bilateral_layout.setSpacing(8)
+        bilateral_title = QLabel("\u2194  Bilateral Screening Comparison")
+        bilateral_title.setObjectName("resultStatTitle")
+        bilateral_layout.addWidget(bilateral_title)
+        brow = QHBoxLayout()
+        brow.setSpacing(20)
+        first_col = QVBoxLayout()
+        first_col.setSpacing(4)
+        self.bilateral_first_eye_lbl = QLabel("\u2014")
+        self.bilateral_first_eye_lbl.setObjectName("resultStatTitle")
+        self.bilateral_first_result_lbl = QLabel("\u2014")
+        self.bilateral_first_result_lbl.setObjectName("resultStatValue")
+        self.bilateral_first_saved_lbl = QLabel("\u2713 Saved")
+        self.bilateral_first_saved_lbl.setStyleSheet("color:#198754;font-weight:700;font-size:12px;")
+        first_col.addWidget(self.bilateral_first_eye_lbl)
+        first_col.addWidget(self.bilateral_first_result_lbl)
+        first_col.addWidget(self.bilateral_first_saved_lbl)
+        brow_div = QFrame()
+        brow_div.setFrameShape(QFrame.Shape.VLine)
+        brow_div.setFrameShadow(QFrame.Shadow.Sunken)
+        second_col = QVBoxLayout()
+        second_col.setSpacing(4)
+        self.bilateral_second_eye_lbl = QLabel("\u2014")
+        self.bilateral_second_eye_lbl.setObjectName("resultStatTitle")
+        self.bilateral_second_result_lbl = QLabel("\u2014")
+        self.bilateral_second_result_lbl.setObjectName("resultStatValue")
+        self.bilateral_second_saved_lbl = QLabel("Unsaved")
+        self.bilateral_second_saved_lbl.setStyleSheet("color:#dc3545;font-weight:700;font-size:12px;")
+        second_col.addWidget(self.bilateral_second_eye_lbl)
+        second_col.addWidget(self.bilateral_second_result_lbl)
+        second_col.addWidget(self.bilateral_second_saved_lbl)
+        brow.addLayout(first_col)
+        brow.addWidget(brow_div)
+        brow.addLayout(second_col)
+        bilateral_layout.addLayout(brow)
+        self.bilateral_frame.hide()
+        review_column.addWidget(self.bilateral_frame)
+
         main_row.addLayout(review_column, 1)
 
         action_rail = QFrame()
@@ -1250,6 +1410,11 @@ class ResultsWindow(QWidget):
         rail_label.setObjectName("resultStatTitle")
         action_layout.addWidget(rail_label)
 
+        self.save_status_label = QLabel("")
+        self.save_status_label.setWordWrap(True)
+        self.save_status_label.hide()
+        action_layout.addWidget(self.save_status_label)
+
         self.btn_save = QPushButton("Save Patient")
         self.btn_save.setObjectName("primaryAction")
         self.btn_save.setAutoDefault(True)
@@ -1260,7 +1425,7 @@ class ResultsWindow(QWidget):
         self.btn_save.clicked.connect(self.save_patient)
         action_layout.addWidget(self.btn_save)
 
-        self.btn_screen_another = QPushButton("Screen Another Image")
+        self.btn_screen_another = QPushButton("Screen Other Eye")
         self.btn_screen_another.setObjectName("secondaryAction")
         self.btn_screen_another.setMinimumHeight(42)
         self.btn_screen_another.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogStart))
@@ -1319,11 +1484,32 @@ class ResultsWindow(QWidget):
         card_layout.addWidget(value)
         return card, value
 
-    def set_results(self, patient_name, image_path, result_class="Pending", confidence_text="Pending"):
+    def set_results(self, patient_name, image_path, result_class="Pending", confidence_text="Pending", eye_label="", first_eye_result=None):
         if patient_name:
-            self.title_label.setText(f"Results for {patient_name}")
+            eye_suffix = f" \u2014 {eye_label}" if eye_label else ""
+            self.title_label.setText(f"Results for {patient_name}{eye_suffix}")
         else:
             self.title_label.setText("Results")
+
+        # Reset save feedback state
+        self.save_status_label.hide()
+        self.save_status_label.setText("")
+        self.btn_save.setEnabled(True)
+        self.btn_save.setText("Save Patient")
+        self.btn_save.setObjectName("primaryAction")
+        self.btn_save.setStyle(self.btn_save.style())
+
+        # Bilateral comparison
+        if first_eye_result:
+            self.bilateral_first_eye_lbl.setText(first_eye_result.get("eye", "\u2014"))
+            self.bilateral_first_result_lbl.setText(first_eye_result.get("result", "\u2014"))
+            self.bilateral_second_eye_lbl.setText(eye_label or "Current Eye")
+            self.bilateral_second_result_lbl.setText(result_class)
+            self.bilateral_second_saved_lbl.setText("Unsaved")
+            self.bilateral_second_saved_lbl.setStyleSheet("color:#dc3545;font-weight:700;font-size:12px;")
+            self.bilateral_frame.show()
+        else:
+            self.bilateral_frame.hide()
 
         self.classification_value.setText(result_class)
         self.confidence_value.setText(confidence_text)
@@ -1348,18 +1534,56 @@ class ResultsWindow(QWidget):
             f"Screening result: {result_class}. Confidence: {confidence_text}. This output area is structured for a clinician-friendly review flow, with the original image on the left, the explainability heatmap on the right, and a written summary below for findings and next-step guidance."
         )
 
+    def mark_saved(self, name, eye_label, result_class):
+        """Called by ScreeningPage after a successful save to update this panel."""
+        self.save_status_label.setText(f"\u2713  Saved \u2014 {name} ({eye_label}): {result_class}")
+        self.save_status_label.setStyleSheet(
+            "color:#0f5132;font-weight:700;font-size:12px;"
+            "background:#d1e7dd;border-radius:6px;padding:6px 8px;"
+        )
+        self.save_status_label.show()
+        self.btn_save.setText("Saved \u2713")
+        self.btn_save.setEnabled(False)
+        if self.bilateral_frame.isVisible():
+            self.bilateral_second_saved_lbl.setText("\u2713 Saved")
+            self.bilateral_second_saved_lbl.setStyleSheet("color:#198754;font-weight:700;font-size:12px;")
+
     def go_back(self):
-        if self.parent_page and hasattr(self.parent_page, "stacked_widget"):
-            self.parent_page.stacked_widget.setCurrentIndex(0)
+        if not self.parent_page:
+            return
+        page = self.parent_page
+        if not getattr(page, "_current_eye_saved", True):
+            reply = QMessageBox.question(
+                self, "Unsaved Screening",
+                "This screening has not been saved yet.\n\nGo back to the intake form without saving?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        if hasattr(page, "stacked_widget"):
+            page.stacked_widget.setCurrentIndex(0)
 
     def save_patient(self):
         if self.parent_page and hasattr(self.parent_page, "save_screening"):
-            self.parent_page.save_screening()
+            self.parent_page.save_screening(reset_after=False)
 
     def new_patient(self):
-        if self.parent_page and hasattr(self.parent_page, "reset_screening"):
-            self.parent_page.reset_screening()
+        if not self.parent_page:
+            return
+        page = self.parent_page
+        if not getattr(page, "_current_eye_saved", True):
+            reply = QMessageBox.question(
+                self, "Unsaved Screening",
+                "This screening has not been saved yet.\n\nDiscard it and start a new patient?",
+                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Discard:
+                return
+        if hasattr(page, "reset_screening"):
+            page.reset_screening()
 
     def _on_screen_another(self):
-        if self.parent_page and hasattr(self.parent_page, "screen_another_image"):
-            self.parent_page.screen_another_image()
+        if self.parent_page and hasattr(self.parent_page, "screen_other_eye"):
+            self.parent_page.screen_other_eye()

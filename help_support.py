@@ -13,93 +13,60 @@ class HelpSupportPage(QWidget):
         root_layout.setContentsMargins(24, 24, 24, 24)
         root_layout.setSpacing(16)
 
-        title = QLabel("Help & Support")
-        title.setObjectName("pageHeader")
-        title.setStyleSheet("font-size: 24px; font-weight: 700; color: #007bff;")
-        root_layout.addWidget(title)
+        self._help_title_lbl = QLabel("Help & Support")
+        self._help_title_lbl.setObjectName("pageHeader")
+        self._help_title_lbl.setStyleSheet("font-size: 24px; font-weight: 700; color: #007bff;")
+        root_layout.addWidget(self._help_title_lbl)
 
-        subtitle = QLabel("Quick guidance for daily workflows, troubleshooting, and support contacts.")
-        subtitle.setObjectName("pageSubtitle")
-        subtitle.setStyleSheet("color: #495057; font-size: 13px;")
-        root_layout.addWidget(subtitle)
+        self._help_subtitle_lbl = QLabel("Quick guidance for daily workflows, troubleshooting, and support contacts.")
+        self._help_subtitle_lbl.setObjectName("pageSubtitle")
+        self._help_subtitle_lbl.setStyleSheet("color: #495057; font-size: 13px;")
+        root_layout.addWidget(self._help_subtitle_lbl)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
 
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setSpacing(16)
-        content_layout.setContentsMargins(0, 0, 0, 0)
+        self._help_content_widget = QWidget()
+        self._help_content_layout = QVBoxLayout(self._help_content_widget)
+        self._help_content_layout.setSpacing(16)
+        self._help_content_layout.setContentsMargins(0, 0, 0, 0)
 
-        content_layout.addWidget(self.build_group(
-            "Quick Start",
-            """
-            <ul>
-                <li>Log in with your assigned role.</li>
-                <li>Use <b>Screening</b> to capture patient details and upload a fundus image.</li>
-                <li>Review the result, then save the screening outcome.</li>
-                <li>Generate summaries in <b>Reports</b>.</li>
-            </ul>
-            """
-        ))
+        self._build_help_groups("English")
 
-        content_layout.addWidget(self.build_group(
-            "How-to Guides",
-            """
-            <ul>
-                <li><b>New screening:</b> Enter patient info, upload image, analyze, then save.</li>
-                <li><b>Review results:</b> Open <b>Reports</b> to view all DR screening outcomes.</li>
-                <li><b>Export report:</b> Use <b>Reports</b> to export all screening results.</li>
-            </ul>
-            """
-        ))
-
-        content_layout.addWidget(self.build_group(
-            "FAQ",
-            """
-            <ul>
-                <li><b>Cannot log in:</b> Verify username/role and reset password with Admin.</li>
-                <li><b>Missing patient:</b> Check spelling, ID format, and date filters.</li>
-                <li><b>Image not loading:</b> Use JPG/PNG and confirm file permissions.</li>
-            </ul>
-            """
-        ))
-
-        content_layout.addWidget(self.build_group(
-            "Troubleshooting",
-            """
-            <ul>
-                <li>Restart the app if pages are unresponsive.</li>
-                <li>Confirm network or storage access for saving reports.</li>
-                <li>Check printer settings or switch to PDF export.</li>
-            </ul>
-            """
-        ))
-
-        content_layout.addWidget(self.build_group(
-            "Privacy & Compliance",
-            """
-            <ul>
-                <li>Only access patient data needed for care.</li>
-                <li>Do not share screenshots or exports outside approved channels.</li>
-                <li>Log out when leaving the workstation.</li>
-            </ul>
-            """
-        ))
-
-        content_layout.addWidget(self.build_group(
-            "Contact Support",
-            """
-            <p><b>Email:</b> support@eyeshield.local<br>
-            <b>Phone:</b> +1-000-000-0000<br>
-            <b>Hours:</b> Mon-Fri, 8:00 AM - 6:00 PM</p>
-            """
-        ))
-
-        content_layout.addStretch()
-        scroll.setWidget(content)
+        scroll.setWidget(self._help_content_widget)
         root_layout.addWidget(scroll)
+
+    def _build_help_groups(self, language: str):
+        from translations import get_pack
+        pack = get_pack(language)
+
+        # Clear existing groups (and trailing stretch)
+        while self._help_content_layout.count():
+            item = self._help_content_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        for title_key, body_key in [
+            ("hlp_quick_start", "hlp_quick_start_body"),
+            ("hlp_howto",       "hlp_howto_body"),
+            ("hlp_faq",         "hlp_faq_body"),
+            ("hlp_troubleshoot","hlp_troubleshoot_body"),
+            ("hlp_privacy",     "hlp_privacy_body"),
+            ("hlp_contact",     "hlp_contact_body"),
+        ]:
+            self._help_content_layout.addWidget(
+                self.build_group(pack[title_key], pack[body_key])
+            )
+
+        self._help_content_layout.addStretch()
+
+    def apply_language(self, language: str):
+        from translations import get_pack
+        pack = get_pack(language)
+        self._help_title_lbl.setText(pack["hlp_title"])
+        self._help_subtitle_lbl.setText(pack["hlp_subtitle"])
+        self._build_help_groups(language)
 
     @staticmethod
     def build_group(title, body_html):

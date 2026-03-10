@@ -31,9 +31,11 @@ class CameraPage(QWidget):
 
         title = QLabel("Temporary Webcam")
         title.setStyleSheet("font-size: 24px; font-weight: 700; color: #007bff;")
+        self._cam_title_lbl = title
 
         subtitle = QLabel("Use this while fundus camera integration is in progress.")
         subtitle.setStyleSheet("font-size: 13px; color: #495057;")
+        self._cam_subtitle_lbl = subtitle
 
         self.status_label = QLabel("Camera is stopped.")
         self.status_label.setStyleSheet("font-size: 12px; color: #6c757d;")
@@ -132,3 +134,17 @@ class CameraPage(QWidget):
     def closeEvent(self, event):
         self.stop_camera()
         super().closeEvent(event)
+
+    def apply_language(self, language: str):
+        from translations import get_pack
+        pack = get_pack(language)
+        if hasattr(self, "_cam_title_lbl"):
+            self._cam_title_lbl.setText(pack["cam_title"])
+        if hasattr(self, "_cam_subtitle_lbl"):
+            self._cam_subtitle_lbl.setText(pack["cam_subtitle"])
+        if self.camera is None and hasattr(self, "status_label") and self.status_label:
+            self.status_label.setText(pack["cam_stopped"])
+        if hasattr(self, "start_btn") and self.start_btn:
+            self.start_btn.setText(pack["cam_start"])
+        if hasattr(self, "stop_btn") and self.stop_btn:
+            self.stop_btn.setText(pack["cam_stop"])

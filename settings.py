@@ -375,7 +375,7 @@ class SettingsPage(QWidget):
         pref_layout.addWidget(self.theme_combo)
 
         self.lang_combo = QComboBox()
-        self.lang_combo.addItems(["English", "Spanish", "French", "Other"])
+        self.lang_combo.addItems(["English", "Filipino"])
         self.language_label = QLabel("Language:")
         pref_layout.addWidget(self.language_label)
         pref_layout.addWidget(self.lang_combo)
@@ -496,54 +496,23 @@ class SettingsPage(QWidget):
         layout.addStretch()
 
     def _language_pack(self, language: str) -> dict:
-        packs = {
-            "English": {
-                "title": "Settings",
-                "subtitle": "Local offline preferences for this installation",
-                "preferences": "Preferences",
-                "theme": "Theme:",
-                "language": "Language:",
-                "auto_logout": "Enable auto-logout after inactivity",
-                "confirm": "Ask confirmation before destructive actions",
-                "compact": "Use compact table rows",
-                "about": "About",
-                "terms": "Terms of Use",
-                "privacy": "Privacy Policy",
-                "reset": "Reset Defaults",
-                "save": "Save Settings",
-            },
-            "Spanish": {
-                "title": "Configuración",
-                "subtitle": "Preferencias locales sin conexión para esta instalación",
-                "preferences": "Preferencias",
-                "theme": "Tema:",
-                "language": "Idioma:",
-                "auto_logout": "Activar cierre automático por inactividad",
-                "confirm": "Pedir confirmación antes de acciones destructivas",
-                "compact": "Usar filas compactas en tablas",
-                "about": "Acerca de",
-                "terms": "Términos de Uso",
-                "privacy": "Política de Privacidad",
-                "reset": "Restablecer",
-                "save": "Guardar configuración",
-            },
-            "French": {
-                "title": "Paramètres",
-                "subtitle": "Préférences locales hors ligne pour cette installation",
-                "preferences": "Préférences",
-                "theme": "Thème :",
-                "language": "Langue :",
-                "auto_logout": "Activer la déconnexion automatique après inactivité",
-                "confirm": "Demander confirmation avant les actions destructrices",
-                "compact": "Utiliser des lignes de tableau compactes",
-                "about": "À propos",
-                "terms": "Conditions d'utilisation",
-                "privacy": "Politique de confidentialité",
-                "reset": "Réinitialiser",
-                "save": "Enregistrer les paramètres",
-            },
+        from translations import get_pack
+        p = get_pack(language)
+        return {
+            "title": p["settings_title"],
+            "subtitle": p["settings_subtitle"],
+            "preferences": p["settings_preferences"],
+            "theme": p["settings_theme"],
+            "language": p["settings_language"],
+            "auto_logout": p["settings_auto_logout"],
+            "confirm": p["settings_confirm"],
+            "compact": p["settings_compact"],
+            "about": p["settings_about"],
+            "terms": p["settings_terms"],
+            "privacy": p["settings_privacy"],
+            "reset": p["settings_reset"],
+            "save": p["settings_save"],
         }
-        return packs.get(language, packs["English"])
 
     def apply_live_preview(self, _value=None):
         theme = self.theme_combo.currentText()
@@ -575,6 +544,12 @@ class SettingsPage(QWidget):
         self.save_btn.setText(pack["save"])
 
         self.status_label.setText(f"Live preview: {theme} / {self.lang_combo.currentText()}")
+
+        # Propagate language change to all other tabs
+        lang = self.lang_combo.currentText()
+        main_window = self.window()
+        if main_window is not self and hasattr(main_window, 'apply_language'):
+            main_window.apply_language(lang)
 
     def _settings_path(self) -> str:
         return os.path.join(os.path.dirname(__file__), self.SETTINGS_FILE)

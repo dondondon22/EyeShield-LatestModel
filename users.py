@@ -473,14 +473,14 @@ class UsersPage(QWidget):
 
         # â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         header_row = QHBoxLayout()
-        title_label = QLabel("User Management")
-        title_label.setStyleSheet(
+        self._usr_title_lbl = QLabel("User Management")
+        self._usr_title_lbl.setStyleSheet(
             "font-size:22px;font-weight:700;color:#0d6efd;"
             "font-family:'Segoe UI','Inter','Arial';"
         )
         self.count_label = QLabel("0 users")
         self.count_label.setStyleSheet("color:#6c757d;font-size:13px;margin-left:10px;")
-        header_row.addWidget(title_label)
+        header_row.addWidget(self._usr_title_lbl)
         header_row.addWidget(self.count_label)
         header_row.addStretch()
 
@@ -501,8 +501,8 @@ class UsersPage(QWidget):
         grid.setColumnStretch(1, 2)
 
         # Users table card
-        table_group = QGroupBox("Users")
-        table_vbox = QVBoxLayout(table_group)
+        self._usr_table_group = QGroupBox("Users")
+        table_vbox = QVBoxLayout(self._usr_table_group)
         table_vbox.setSpacing(8)
 
         self.users_table = QTableWidget(0, 3)
@@ -534,11 +534,11 @@ class UsersPage(QWidget):
         action_row.addWidget(self.reset_pw_btn)
         action_row.addWidget(self.delete_btn)
         table_vbox.addLayout(action_row)
-        grid.addWidget(table_group, 0, 0)
+        grid.addWidget(self._usr_table_group, 0, 0)
 
         # Activity log card
-        log_group = QGroupBox("Activity Log")
-        log_vbox = QVBoxLayout(log_group)
+        self._usr_log_group = QGroupBox("Activity Log")
+        log_vbox = QVBoxLayout(self._usr_log_group)
         self.activity_log = QTableWidget(0, 3)
         self.activity_log.setHorizontalHeaderLabels(["User", "Action", "Time"])
         self.activity_log.setSelectionMode(QAbstractItemView.NoSelection)
@@ -548,7 +548,7 @@ class UsersPage(QWidget):
         self.activity_log.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.activity_log.setMinimumHeight(240)
         log_vbox.addWidget(self.activity_log)
-        grid.addWidget(log_group, 0, 1)
+        grid.addWidget(self._usr_log_group, 0, 1)
 
         main_layout.addLayout(grid)
 
@@ -772,4 +772,11 @@ class UsersPage(QWidget):
         self.activity_log.setItem(row, 0, QTableWidgetItem(user))
         self.activity_log.setItem(row, 1, QTableWidgetItem(action))
         self.activity_log.setItem(row, 2, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
+
+    def apply_language(self, language: str):
+        from translations import get_pack
+        pack = get_pack(language)
+        self._usr_title_lbl.setText(pack["usr_title"])
+        self._usr_table_group.setTitle(pack["usr_table"])
+        self._usr_log_group.setTitle(pack["usr_log"])
 
