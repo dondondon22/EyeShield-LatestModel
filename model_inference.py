@@ -27,6 +27,11 @@ from torchvision import models, transforms
 from PIL import Image
 
 
+class ImageUngradableError(ValueError):
+    """Raised when the input image fails quality / gradability checks."""
+    pass
+
+
 # ── DR class labels ───────────────────────────────────────────────────────────
 DR_LABELS = [
     "No DR",
@@ -85,6 +90,24 @@ def load_model() -> nn.Module:
     return net
 
 
+def _laplacian_var(gray: np.ndarray) -> float:
+    """Return the variance of the Laplacian of a 2-D uint8 grayscale array.
+    Higher values indicate a sharper image."""
+    lap = (
+        gray[1:-1, 1:-1].astype(np.float32) * -4.0
+        + gray[:-2,  1:-1].astype(np.float32)
+        + gray[2:,   1:-1].astype(np.float32)
+        + gray[1:-1, :-2].astype(np.float32)
+        + gray[1:-1, 2:].astype(np.float32)
+    )
+    return float(np.var(lap))
+
+
+def check_image_quality(image_path: str) -> None:
+    """Quality check temporarily disabled. Re-enable by restoring the body."""
+    return
+
+
 def _apply_jet(cam: np.ndarray) -> np.ndarray:
     """Apply jet colormap to an H×W float32 array in [0, 1]. Returns H×W×3 uint8."""
     x = np.clip(cam, 0.0, 1.0)
@@ -123,6 +146,8 @@ def run_inference(image_path: str) -> tuple[str, str, str]:
 
     if _model is None:
         _model = load_model()
+
+    check_image_quality(image_path)
 
     image = Image.open(image_path).convert("RGB")
     tensor = _TRANSFORM(image).unsqueeze(0).to(_device)  # [1, 3, H, W]

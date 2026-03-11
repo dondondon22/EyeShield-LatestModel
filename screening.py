@@ -11,18 +11,65 @@ from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QLineEdit, QVBoxLayout, QHBoxLayout,
     QFileDialog, QFormLayout, QGroupBox, QComboBox, QDateEdit, QMessageBox,
     QDoubleSpinBox, QSpinBox, QCheckBox, QTextEdit, QCalendarWidget, QStackedWidget,
-    QGridLayout, QFrame, QStyle, QDialog, QScrollArea
+    QGridLayout, QFrame, QStyle, QDialog, QScrollArea, QProgressBar
 )
 from PySide6.QtGui import QPixmap, QFont, QRegularExpressionValidator, QPainter, QPen, QColor
 from PySide6.QtCore import Qt, QDate, QRegularExpression, QSize, QEvent, QThread, Signal
 import os
 from auth import DB_FILE
 
+# ── Per-grade clinical constants ──────────────────────────────────────────────
+_DR_COLORS = {
+    "No DR":              "#198754",
+    "Mild DR":            "#b35a00",
+    "Moderate DR":        "#c1540a",
+    "Severe DR":          "#dc3545",
+    "Proliferative DR":   "#842029",
+}
+
+_DR_RECOMMENDATIONS = {
+    "No DR":            "Annual screening recommended",
+    "Mild DR":          "6–12 month follow-up",
+    "Moderate DR":      "Ophthalmology referral within 3 months",
+    "Severe DR":        "Urgent ophthalmology referral",
+    "Proliferative DR": "Immediate ophthalmology referral",
+}
+
+_DR_SUMMARIES = {
+    "No DR": (
+        "No signs of diabetic retinopathy were detected in this fundus image. "
+        "Continue standard diabetes management, maintain optimal glycemic and blood pressure control, "
+        "and schedule routine annual retinal screening."
+    ),
+    "Mild DR": (
+        "Early microaneurysms consistent with mild non-proliferative diabetic retinopathy (NPDR) were identified. "
+        "Intensify glycemic and blood pressure management. "
+        "A follow-up retinal examination in 6–12 months is recommended."
+    ),
+    "Moderate DR": (
+        "Features consistent with moderate non-proliferative diabetic retinopathy (NPDR) were detected, "
+        "including microaneurysms, haemorrhages, and/or hard exudates. "
+        "Referral to an ophthalmologist within 3 months is advised. "
+        "Reassess systemic metabolic control."
+    ),
+    "Severe DR": (
+        "Findings consistent with severe non-proliferative diabetic retinopathy (NPDR) were detected. "
+        "The risk of progression to proliferative disease within 12 months is high. "
+        "Urgent ophthalmology referral is required for further evaluation and possible treatment."
+    ),
+    "Proliferative DR": (
+        "Proliferative diabetic retinopathy (PDR) was detected — a sight-threatening condition. "
+        "Immediate ophthalmology referral is required for evaluation and potential intervention, "
+        "such as laser photocoagulation or intravitreal anti-VEGF therapy."
+    ),
+}
+
 
 class _InferenceWorker(QThread):
     """Run model_inference.run_inference() on a background thread."""
-    finished = Signal(str, str, str)  # label, confidence_text, heatmap_path
-    error = Signal(str)               # human-readable error message
+    finished   = Signal(str, str, str)  # label, confidence_text, heatmap_path
+    error      = Signal(str)            # hard error message
+    ungradable = Signal(str)            # image quality / gradability failure
 
     def __init__(self, image_path: str):
         super().__init__()
@@ -30,9 +77,12 @@ class _InferenceWorker(QThread):
 
     def run(self):
         try:
-            from model_inference import run_inference
-            label, conf, heatmap_path = run_inference(self._image_path)
-            self.finished.emit(label, conf, heatmap_path)
+            from model_inference import run_inference, ImageUngradableError
+            try:
+                label, conf, heatmap_path = run_inference(self._image_path)
+                self.finished.emit(label, conf, heatmap_path)
+            except ImageUngradableError as exc:
+                self.ungradable.emit(str(exc))
         except Exception as exc:
             self.error.emit(str(exc))
 
@@ -1094,13 +1144,15 @@ class ScreeningPage(QWidget):
             self.p_name.text(), path,
             "Analyzing…", "Please wait",
         )
+        patient_data = self._collect_patient_data()
         self._worker = _InferenceWorker(path)
         self._worker.finished.connect(
             lambda label, conf, hmap: self._on_inference_done(
-                label, conf, hmap, self.p_eye.currentText()
+                label, conf, hmap, self.p_eye.currentText(), patient_data
             )
         )
         self._worker.error.connect(self._on_inference_error)
+        self._worker.ungradable.connect(self._on_image_ungradable)
         self._worker.start()
 
     def open_results_window(self):
@@ -1135,14 +1187,16 @@ class ScreeningPage(QWidget):
         self.btn_analyze.setEnabled(False)
 
         # Run inference on a background thread
+        patient_data = self._collect_patient_data()
         self._worker = _InferenceWorker(self.current_image)
         self._worker.finished.connect(
-            lambda label, conf, hmap: self._on_inference_done(label, conf, hmap, eye_label)
+            lambda label, conf, hmap: self._on_inference_done(label, conf, hmap, eye_label, patient_data)
         )
         self._worker.error.connect(self._on_inference_error)
+        self._worker.ungradable.connect(self._on_image_ungradable)
         self._worker.start()
 
-    def _on_inference_done(self, label: str, conf: str, heatmap_path: str, eye_label: str):
+    def _on_inference_done(self, label: str, conf: str, heatmap_path: str, eye_label: str, patient_data: dict | None = None):
         self.last_result_class = label
         self.last_result_conf = conf
         self.btn_analyze.setEnabled(True)
@@ -1154,6 +1208,7 @@ class ScreeningPage(QWidget):
             eye_label=eye_label,
             first_eye_result=self._first_eye_result,
             heatmap_path=heatmap_path,
+            patient_data=patient_data,
         )
 
     def _on_inference_error(self, message: str):
@@ -1163,6 +1218,34 @@ class ScreeningPage(QWidget):
             self, "Analysis Failed",
             f"Could not run the DR model:\n\n{message}"
         )
+
+    def _on_image_ungradable(self, message: str):
+        """Called when the quality check rejects the uploaded image."""
+        self.btn_analyze.setEnabled(True)
+        self.stacked_widget.setCurrentIndex(0)
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Image Not Gradable")
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setText(
+            "<b>The uploaded image does not meet the minimum quality "
+            "requirements for DR screening.</b>"
+        )
+        msg.setInformativeText(
+            message + "\n\nPlease upload a clearer, well-lit fundus photograph and try again."
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
+
+    def _collect_patient_data(self) -> dict:
+        """Snapshot the current intake form into a plain dict for the explanation generator."""
+        return {
+            "age":            self.p_age.value(),
+            "hba1c":          self.hba1c.value(),
+            "duration":       self.diabetes_duration.value(),
+            "prev_treatment": self.prev_treatment.isChecked(),
+            "diabetes_type":  self.diabetes_type.currentText(),
+            "eye":            self.p_eye.currentText(),
+        }
 
     def clear_image(self):
         self.current_image = None
@@ -1338,6 +1421,114 @@ class ScreeningPage(QWidget):
             if item and item.widget():
                 item.widget().setText(text)
 
+def _generate_explanation(
+    result_class: str,
+    confidence_text: str,
+    patient_data: dict | None = None,
+) -> str:
+    """
+    Build a personalised clinical explanation from the DR grade,
+    model confidence, and the patient's clinical profile.
+    Returns HTML-ready text (paragraphs separated by <br><br>).
+    """
+    pd       = patient_data or {}
+    age      = int(pd.get("age",  0))
+    hba1c    = float(pd.get("hba1c", 0.0))
+    duration = int(pd.get("duration", 0))
+    prev_tx  = bool(pd.get("prev_treatment", False))
+    d_type   = str(pd.get("diabetes_type", "")).strip()
+    eye      = str(pd.get("eye", "")).strip()
+
+    eye_phrase = f"the {eye.lower()}" if eye and eye.lower() not in ("", "select") else "the screened eye"
+
+    # ── Opening sentence: finding ─────────────────────────────────────────────
+    opening_map = {
+        "No DR":            f"No signs of diabetic retinopathy were detected in {eye_phrase}",
+        "Mild DR":          f"Early microaneurysms consistent with mild non-proliferative diabetic "
+                            f"retinopathy (NPDR) were identified in {eye_phrase}",
+        "Moderate DR":      f"Microaneurysms, haemorrhages, and/or hard exudates consistent with "
+                            f"moderate non-proliferative diabetic retinopathy (NPDR) were detected "
+                            f"in {eye_phrase}",
+        "Severe DR":        f"Extensive haemorrhages, venous beading, or intraretinal microvascular "
+                            f"abnormalities consistent with severe NPDR were detected in {eye_phrase}",
+        "Proliferative DR": f"Neovascularisation indicative of proliferative diabetic retinopathy "
+                            f"(PDR) \u2014 a sight-threatening condition \u2014 was detected in {eye_phrase}",
+    }
+    paragraphs = [
+        opening_map.get(result_class, f"{result_class} was detected in {eye_phrase}")
+        + f" ({confidence_text.lower()})."
+    ]
+
+    # ── Patient context ────────────────────────────────────────────────────────
+    ctx = []
+    if age > 0:
+        ctx.append(f"{age}\u2011year\u2011old")
+    if d_type and d_type.lower() not in ("select", ""):
+        ctx.append(f"{d_type} diabetes")
+    if duration > 0:
+        ctx.append(f"{duration}\u2011year diabetes duration")
+    if ctx:
+        paragraphs.append("<b>Patient profile:</b> " + ", ".join(ctx) + ".")
+
+    # ── Risk factor commentary ─────────────────────────────────────────────────
+    risk = []
+    if hba1c >= 9.0:
+        risk.append(
+            f"HbA1c of <b>{hba1c:.1f}%</b> indicates poor glycaemic control, which substantially "
+            "increases the risk of retinopathy progression and macular oedema."
+        )
+    elif hba1c >= 7.5:
+        risk.append(
+            f"HbA1c of <b>{hba1c:.1f}%</b> is above the recommended target (\u22647.0\u20137.5%). "
+            "Tighter glycaemic management is advised to slow disease progression."
+        )
+    elif hba1c > 0.0:
+        risk.append(
+            f"HbA1c of <b>{hba1c:.1f}%</b> is within an acceptable range. "
+            "Continue current glycaemic management strategy."
+        )
+
+    if duration >= 15 and result_class != "No DR":
+        risk.append(
+            f"A diabetes duration of <b>{duration} years</b> is a recognised risk factor for "
+            "bilateral retinal involvement; bilateral screening is recommended if not already performed."
+        )
+    elif result_class in ("Severe DR", "Proliferative DR") and duration >= 10:
+        risk.append(
+            f"Diabetes duration of <b>{duration} years</b> is consistent with the advanced retinal findings observed."
+        )
+
+    if prev_tx and result_class != "No DR":
+        risk.append(
+            "A history of prior DR treatment requires close monitoring for recurrence, "
+            "progression, or treatment-related complications."
+        )
+
+    if risk:
+        paragraphs.append("<br>".join(risk))
+
+    # ── Recommendation ─────────────────────────────────────────────────────────
+    rec_map = {
+        "No DR":            "Maintain optimal glycaemic and blood pressure control. "
+                            "Annual retinal screening is recommended.",
+        "Mild DR":          "Intensify glycaemic and blood pressure management. "
+                            "Schedule a repeat retinal examination in 6\u201312 months.",
+        "Moderate DR":      "Ophthalmology referral within 3 months is advised. "
+                            "Reassess systemic metabolic control and consider treatment intensification.",
+        "Severe DR":        "Urgent ophthalmology referral is required. "
+                            "The 1-year risk of progression to proliferative disease is high without intervention.",
+        "Proliferative DR": "Immediate ophthalmology referral is required. "
+                            "Treatment may include laser photocoagulation, intravitreal anti-VEGF therapy, "
+                            "or vitreoretinal surgery.",
+    }
+    paragraphs.append(
+        "<b>Recommendation:</b> "
+        + rec_map.get(result_class, "Consult a qualified ophthalmologist for further evaluation.")
+    )
+
+    return "<br><br>".join(paragraphs)
+
+
 class ResultsWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1356,6 +1547,24 @@ class ResultsWindow(QWidget):
         self.subtitle_label.setObjectName("pageSubtitle")
         self.subtitle_label.setWordWrap(True)
         layout.addWidget(self.subtitle_label)
+
+        self._loading_bar = QProgressBar()
+        self._loading_bar.setRange(0, 0)   # indeterminate / marquee
+        self._loading_bar.setFixedHeight(6)
+        self._loading_bar.setTextVisible(False)
+        self._loading_bar.setStyleSheet("""
+            QProgressBar {
+                background: #e9ecef;
+                border: none;
+                border-radius: 3px;
+            }
+            QProgressBar::chunk {
+                background: #0d6efd;
+                border-radius: 3px;
+            }
+        """)
+        self._loading_bar.hide()
+        layout.addWidget(self._loading_bar)
 
         main_row = QHBoxLayout()
         main_row.setSpacing(14)
@@ -1376,7 +1585,7 @@ class ResultsWindow(QWidget):
         self.source_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.source_label.setWordWrap(True)
         source_layout.addWidget(self.source_label)
-        self.source_note = QLabel("This panel preserves the original fundus image for comparison against the model visualization. Click the image to inspect and zoom.")
+        self.source_note = QLabel("Original fundus photograph submitted for screening. Click to open in full-resolution zoom viewer.")
         self.source_note.setObjectName("statusLabel")
         self.source_note.setWordWrap(True)
         source_layout.addWidget(self.source_note)
@@ -1391,7 +1600,7 @@ class ResultsWindow(QWidget):
         self.heatmap_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.heatmap_label.setWordWrap(True)
         heatmap_layout.addWidget(self.heatmap_label)
-        self.heatmap_note = QLabel("Reserved for the lesion-attention or explainability overlay generated by the model. When a heatmap image is available, it will also open on click.")
+        self.heatmap_note = QLabel("Grad-CAM\u207a\u207a attention overlay highlighting retinal regions that influenced the model\u2019s prediction. Click to open in full-resolution zoom viewer.")
         self.heatmap_note.setObjectName("statusLabel")
         self.heatmap_note.setWordWrap(True)
         heatmap_layout.addWidget(self.heatmap_note)
@@ -1516,7 +1725,7 @@ class ResultsWindow(QWidget):
         self.explanation.setWordWrap(True)
         self.explanation.setStyleSheet("font-size: 11pt; color: #333; line-height: 1.45;")
         explanation_layout.addWidget(self.explanation)
-        self.explanation_hint = QLabel("Use this area for screening rationale, referral guidance, and any findings tied to the future heatmap.")
+        self.explanation_hint = QLabel("AI-generated summary based on the DR grade. Always verify results with a qualified clinician before acting on this output.")
         self.explanation_hint.setObjectName("statusLabel")
         self.explanation_hint.setWordWrap(True)
         explanation_layout.addWidget(self.explanation_hint)
@@ -1539,20 +1748,29 @@ class ResultsWindow(QWidget):
         card_layout.addWidget(value)
         return card, value
 
-    def set_results(self, patient_name, image_path, result_class="Pending", confidence_text="Pending", eye_label="", first_eye_result=None, heatmap_path=""):
+    def set_results(self, patient_name, image_path, result_class="Pending", confidence_text="Pending", eye_label="", first_eye_result=None, heatmap_path="", patient_data=None):
+        is_loading = result_class in ("Analyzing…", "Pending")
+
         if patient_name:
             eye_suffix = f" \u2014 {eye_label}" if eye_label else ""
             self.title_label.setText(f"Results for {patient_name}{eye_suffix}")
         else:
             self.title_label.setText("Results")
 
+        # Loading bar
+        if is_loading:
+            self._loading_bar.show()
+        else:
+            self._loading_bar.hide()
+
         # Reset save feedback state
         self.save_status_label.hide()
         self.save_status_label.setText("")
-        self.btn_save.setEnabled(True)
+        self.btn_save.setEnabled(not is_loading)
         self.btn_save.setText("Save Patient")
         self.btn_save.setObjectName("primaryAction")
         self.btn_save.setStyle(self.btn_save.style())
+        self.btn_screen_another.setEnabled(not is_loading)
 
         # Bilateral comparison
         if first_eye_result:
@@ -1566,32 +1784,51 @@ class ResultsWindow(QWidget):
         else:
             self.bilateral_frame.hide()
 
+        # Classification with severity colour
         self.classification_value.setText(result_class)
-        self.confidence_value.setText(confidence_text)
-
-        recommendation = "Routine follow-up"
-        if "no dr" not in result_class.lower():
-            recommendation = "Clinical review advised"
-        self.recommendation_value.setText(recommendation)
-        self.subtitle_label.setText(
-            f"Current output shows {result_class.lower()} with {confidence_text.lower()}. The layout is ready for the final heatmap and explanation output."
+        grade_color = _DR_COLORS.get(result_class, "#1f2937")
+        self.classification_value.setStyleSheet(
+            f"color:{grade_color};font-size:20px;font-weight:700;"
         )
 
+        self.confidence_value.setText(confidence_text)
+
+        # Grade-specific recommendation
+        recommendation = _DR_RECOMMENDATIONS.get(result_class, "Consult a clinician")
+        if is_loading:
+            recommendation = "—"
+        self.recommendation_value.setText(recommendation)
+
+        # Subtitle
+        if is_loading:
+            self.subtitle_label.setText("Running DR analysis — please wait…")
+        else:
+            conf_part = f" with {confidence_text.lower()}" if not is_loading else ""
+            self.subtitle_label.setText(
+                f"Screening complete — {result_class}{conf_part}. "
+                "Review the fundus image, Grad-CAM\u207a\u207a heatmap, and clinical summary below."
+            )
+
+        # Image and heatmap panels
         if image_path:
             source_pixmap = QPixmap(image_path)
             self.source_label.set_viewable_pixmap(source_pixmap, 460, 360)
-            if heatmap_path and os.path.isfile(heatmap_path):
+            if is_loading:
+                self.heatmap_label.clear_view("Generating heatmap…")
+            elif heatmap_path and os.path.isfile(heatmap_path):
                 hmap_pixmap = QPixmap(heatmap_path)
                 self.heatmap_label.set_viewable_pixmap(hmap_pixmap, 460, 360)
             else:
-                self.heatmap_label.clear_view("")
+                self.heatmap_label.clear_view("Heatmap unavailable")
         else:
             self.source_label.clear_view("")
             self.heatmap_label.clear_view("")
 
-        self.explanation.setText(
-            f"Screening result: {result_class}. Confidence: {confidence_text}. This output area is structured for a clinician-friendly review flow, with the original image on the left, the explainability heatmap on the right, and a written summary below for findings and next-step guidance."
-        )
+        # Clinical summary
+        if is_loading:
+            self.explanation.setText("Awaiting model output…")
+        else:
+            self.explanation.setText(_generate_explanation(result_class, confidence_text, patient_data))
 
     def mark_saved(self, name, eye_label, result_class):
         """Called by ScreeningPage after a successful save to update this panel."""
