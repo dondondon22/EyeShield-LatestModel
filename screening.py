@@ -64,9 +64,17 @@ _DR_SUMMARIES = {
     ),
 }
 
+# ── Pen annotation colour palette ─────────────────────────────────────────────
+_PEN_COLORS = [
+    ("#c81e1e", "Red"),
+    ("#fde910", "Yellow"),
+    ("#ffffff", "White"),
+]
+
 
 class _InferenceWorker(QThread):
     """Run model_inference.run_inference() on a background thread."""
+    result_ready = Signal(str, str)      # label, confidence_text
     finished   = Signal(str, str, str)  # label, confidence_text, heatmap_path
     error      = Signal(str)            # hard error message
     ungradable = Signal(str)            # image quality / gradability failure
@@ -77,9 +85,11 @@ class _InferenceWorker(QThread):
 
     def run(self):
         try:
-            from model_inference import run_inference, ImageUngradableError
+            from model_inference import generate_heatmap, predict_image, ImageUngradableError
             try:
-                label, conf, heatmap_path = run_inference(self._image_path)
+                label, conf, class_idx = predict_image(self._image_path)
+                self.result_ready.emit(label, conf)
+                heatmap_path = generate_heatmap(self._image_path, class_idx)
                 self.finished.emit(label, conf, heatmap_path)
             except ImageUngradableError as exc:
                 self.ungradable.emit(str(exc))
@@ -93,6 +103,7 @@ class DrawableZoomLabel(QLabel):
         self.base_pixmap = QPixmap()
         self.zoom_factor = 1.0
         self.draw_enabled = False
+        self.pen_color = QColor("#c81e1e")
         self.strokes = []
         self.current_stroke = []
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -110,6 +121,9 @@ class DrawableZoomLabel(QLabel):
     def set_draw_enabled(self, enabled):
         self.draw_enabled = enabled
         self.setCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor)
+
+    def set_pen_color(self, color: QColor):
+        self.pen_color = color
 
     def clear_drawings(self):
         self.strokes = []
@@ -140,7 +154,7 @@ class DrawableZoomLabel(QLabel):
 
         painter = QPainter(canvas)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor("#c81e1e"), max(2, int(2 * self.zoom_factor)), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        pen = QPen(self.pen_color, max(2, int(2 * self.zoom_factor)), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
 
         for stroke in self.strokes + ([self.current_stroke] if self.current_stroke else []):
@@ -224,12 +238,25 @@ class ImageZoomDialog(QDialog):
         reset_btn.clicked.connect(self.reset_zoom)
         controls.addWidget(reset_btn)
 
-        draw_btn = QPushButton("✎")
+        draw_btn = QPushButton("✏")
         draw_btn.setCheckable(True)
         draw_btn.setToolTip("Draw annotations")
         draw_btn.setFixedSize(38, 38)
+        draw_btn.setStyleSheet("font-size: 16px;")
         draw_btn.toggled.connect(self.toggle_draw_mode)
         controls.addWidget(draw_btn)
+        self._draw_btn = draw_btn
+
+        self._swatches = []
+        for _hex, _name in _PEN_COLORS:
+            _sw = QPushButton()
+            _sw.setFixedSize(22, 22)
+            _sw.setToolTip(_name)
+            _border = "3px solid #0d6efd" if _hex == _PEN_COLORS[0][0] else "2px solid #adb5bd"
+            _sw.setStyleSheet(f"background:{_hex};border-radius:11px;border:{_border};")
+            _sw.clicked.connect(lambda checked=False, h=_hex: self._set_pen_color(h))
+            controls.addWidget(_sw)
+            self._swatches.append((_sw, _hex))
 
         clear_draw_btn = QPushButton()
         clear_draw_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogDiscardButton))
@@ -292,6 +319,14 @@ class ImageZoomDialog(QDialog):
 
     def clear_drawings(self):
         self.image_label.clear_drawings()
+
+    def _set_pen_color(self, hex_color: str):
+        self.image_label.set_pen_color(QColor(hex_color))
+        for sw, h in self._swatches:
+            border = "3px solid #0d6efd" if h == hex_color else "2px solid #adb5bd"
+            sw.setStyleSheet(f"background:{h};border-radius:11px;border:{border};")
+        # Clicking a color automatically activates draw mode
+        self._draw_btn.setChecked(True)
 
 
 class ClickableImageLabel(QLabel):
@@ -1146,6 +1181,11 @@ class ScreeningPage(QWidget):
         )
         patient_data = self._collect_patient_data()
         self._worker = _InferenceWorker(path)
+        self._worker.result_ready.connect(
+            lambda label, conf: self._on_prediction_ready(
+                label, conf, self.p_eye.currentText(), patient_data
+            )
+        )
         self._worker.finished.connect(
             lambda label, conf, hmap: self._on_inference_done(
                 label, conf, hmap, self.p_eye.currentText(), patient_data
@@ -1189,12 +1229,29 @@ class ScreeningPage(QWidget):
         # Run inference on a background thread
         patient_data = self._collect_patient_data()
         self._worker = _InferenceWorker(self.current_image)
+        self._worker.result_ready.connect(
+            lambda label, conf: self._on_prediction_ready(label, conf, eye_label, patient_data)
+        )
         self._worker.finished.connect(
             lambda label, conf, hmap: self._on_inference_done(label, conf, hmap, eye_label, patient_data)
         )
         self._worker.error.connect(self._on_inference_error)
         self._worker.ungradable.connect(self._on_image_ungradable)
         self._worker.start()
+
+    def _on_prediction_ready(self, label: str, conf: str, eye_label: str, patient_data: dict | None = None):
+        self.last_result_class = label
+        self.last_result_conf = conf
+        self.results_page.set_results(
+            self.p_name.text(),
+            self.current_image,
+            label,
+            conf,
+            eye_label=eye_label,
+            first_eye_result=self._first_eye_result,
+            patient_data=patient_data,
+            heatmap_pending=True,
+        )
 
     def _on_inference_done(self, label: str, conf: str, heatmap_path: str, eye_label: str, patient_data: dict | None = None):
         self.last_result_class = label
@@ -1209,6 +1266,7 @@ class ScreeningPage(QWidget):
             first_eye_result=self._first_eye_result,
             heatmap_path=heatmap_path,
             patient_data=patient_data,
+            heatmap_pending=False,
         )
 
     def _on_inference_error(self, message: str):
@@ -1534,7 +1592,29 @@ class ResultsWindow(QWidget):
         super().__init__(parent)
         self.parent_page = parent
         self.setMinimumSize(980, 700)
-        layout = QVBoxLayout(self)
+
+        # Report generation state — updated by set_results()
+        self._current_image_path   = ""
+        self._current_heatmap_path = ""
+        self._current_result_class = "Pending"
+        self._current_confidence   = ""
+        self._current_eye_label    = ""
+        self._current_patient_name = ""
+
+        # Outer layout holds only the scroll area so the whole page is scrollable.
+        _outer = QVBoxLayout(self)
+        _outer.setContentsMargins(0, 0, 0, 0)
+        _outer.setSpacing(0)
+
+        _scroll = QScrollArea()
+        _scroll.setWidgetResizable(True)
+        _scroll.setFrameShape(QFrame.Shape.NoFrame)
+        _outer.addWidget(_scroll)
+
+        _container = QWidget()
+        _scroll.setWidget(_container)
+
+        layout = QVBoxLayout(_container)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
 
@@ -1585,10 +1665,6 @@ class ResultsWindow(QWidget):
         self.source_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.source_label.setWordWrap(True)
         source_layout.addWidget(self.source_label)
-        self.source_note = QLabel("Original fundus photograph submitted for screening. Click to open in full-resolution zoom viewer.")
-        self.source_note.setObjectName("statusLabel")
-        self.source_note.setWordWrap(True)
-        source_layout.addWidget(self.source_note)
 
         heatmap_group = QGroupBox("Heatmap Output")
         heatmap_layout = QVBoxLayout(heatmap_group)
@@ -1600,10 +1676,6 @@ class ResultsWindow(QWidget):
         self.heatmap_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.heatmap_label.setWordWrap(True)
         heatmap_layout.addWidget(self.heatmap_label)
-        self.heatmap_note = QLabel("Grad-CAM\u207a\u207a attention overlay highlighting retinal regions that influenced the model\u2019s prediction. Click to open in full-resolution zoom viewer.")
-        self.heatmap_note.setObjectName("statusLabel")
-        self.heatmap_note.setWordWrap(True)
-        heatmap_layout.addWidget(self.heatmap_note)
 
         preview_row.addWidget(source_group, 1)
         preview_row.addWidget(heatmap_group, 1)
@@ -1689,6 +1761,14 @@ class ResultsWindow(QWidget):
         self.btn_save.clicked.connect(self.save_patient)
         action_layout.addWidget(self.btn_save)
 
+        self.btn_report = QPushButton("Generate Report")
+        self.btn_report.setMinimumHeight(42)
+        self.btn_report.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self.btn_report.setIconSize(QSize(18, 18))
+        self.btn_report.setEnabled(False)
+        self.btn_report.clicked.connect(self.generate_report)
+        action_layout.addWidget(self.btn_report)
+
         self.btn_screen_another = QPushButton("Screen Other Eye")
         self.btn_screen_another.setObjectName("secondaryAction")
         self.btn_screen_another.setMinimumHeight(42)
@@ -1748,8 +1828,9 @@ class ResultsWindow(QWidget):
         card_layout.addWidget(value)
         return card, value
 
-    def set_results(self, patient_name, image_path, result_class="Pending", confidence_text="Pending", eye_label="", first_eye_result=None, heatmap_path="", patient_data=None):
+    def set_results(self, patient_name, image_path, result_class="Pending", confidence_text="Pending", eye_label="", first_eye_result=None, heatmap_path="", patient_data=None, heatmap_pending=False):
         is_loading = result_class in ("Analyzing…", "Pending")
+        is_busy = is_loading or heatmap_pending
 
         if patient_name:
             eye_suffix = f" \u2014 {eye_label}" if eye_label else ""
@@ -1758,7 +1839,7 @@ class ResultsWindow(QWidget):
             self.title_label.setText("Results")
 
         # Loading bar
-        if is_loading:
+        if is_busy:
             self._loading_bar.show()
         else:
             self._loading_bar.hide()
@@ -1766,11 +1847,11 @@ class ResultsWindow(QWidget):
         # Reset save feedback state
         self.save_status_label.hide()
         self.save_status_label.setText("")
-        self.btn_save.setEnabled(not is_loading)
+        self.btn_save.setEnabled(not is_busy)
         self.btn_save.setText("Save Patient")
         self.btn_save.setObjectName("primaryAction")
         self.btn_save.setStyle(self.btn_save.style())
-        self.btn_screen_another.setEnabled(not is_loading)
+        self.btn_screen_another.setEnabled(not is_busy)
 
         # Bilateral comparison
         if first_eye_result:
@@ -1802,6 +1883,12 @@ class ResultsWindow(QWidget):
         # Subtitle
         if is_loading:
             self.subtitle_label.setText("Running DR analysis — please wait…")
+        elif heatmap_pending:
+            conf_part = f" with {confidence_text.lower()}" if confidence_text else ""
+            self.subtitle_label.setText(
+                f"Screening complete — {result_class}{conf_part}. "
+                "Generating the Grad-CAM++ heatmap now."
+            )
         else:
             conf_part = f" with {confidence_text.lower()}" if not is_loading else ""
             self.subtitle_label.setText(
@@ -1814,12 +1901,14 @@ class ResultsWindow(QWidget):
             source_pixmap = QPixmap(image_path)
             self.source_label.set_viewable_pixmap(source_pixmap, 460, 360)
             if is_loading:
-                self.heatmap_label.clear_view("Generating heatmap…")
+                self.heatmap_label.clear_view("")
+            elif heatmap_pending:
+                self.heatmap_label.clear_view("")
             elif heatmap_path and os.path.isfile(heatmap_path):
                 hmap_pixmap = QPixmap(heatmap_path)
                 self.heatmap_label.set_viewable_pixmap(hmap_pixmap, 460, 360)
             else:
-                self.heatmap_label.clear_view("Heatmap unavailable")
+                self.heatmap_label.clear_view("")
         else:
             self.source_label.clear_view("")
             self.heatmap_label.clear_view("")
@@ -1829,6 +1918,20 @@ class ResultsWindow(QWidget):
             self.explanation.setText("Awaiting model output…")
         else:
             self.explanation.setText(_generate_explanation(result_class, confidence_text, patient_data))
+
+        # Keep state current so generate_report always has the latest values
+        self._current_image_path   = image_path or ""
+        self._current_heatmap_path = heatmap_path or ""
+        self._current_result_class = result_class
+        self._current_confidence   = confidence_text
+        self._current_eye_label    = eye_label
+        self._current_patient_name = patient_name or ""
+        _report_ready = (
+            not is_busy
+            and bool(image_path)
+            and result_class not in ("Analyzing…", "Pending")
+        )
+        self.btn_report.setEnabled(_report_ready)
 
     def mark_saved(self, name, eye_label, result_class):
         """Called by ScreeningPage after a successful save to update this panel."""
@@ -1883,3 +1986,199 @@ class ResultsWindow(QWidget):
     def _on_screen_another(self):
         if self.parent_page and hasattr(self.parent_page, "screen_other_eye"):
             self.parent_page.screen_other_eye()
+
+    # ── Report generation ──────────────────────────────────────────────────────
+
+    def generate_report(self):
+        """Generate a PDF screening report for the current patient."""
+        if self._current_result_class in ("Pending", "Analyzing…") or not self._current_image_path:
+            QMessageBox.information(self, "Generate Report", "No completed screening results to report.")
+            return
+
+        default_name = (
+            f"EyeShield_Report_{self._current_patient_name or 'Patient'}_"
+            f"{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Screening Report", default_name, "PDF Files (*.pdf)"
+        )
+        if not path:
+            return
+
+        try:
+            from PySide6.QtGui import QPdfWriter, QPageSize, QPageLayout, QTextDocument
+            from PySide6.QtCore import QUrl, QMarginsF
+        except ImportError:
+            QMessageBox.warning(self, "Generate Report", "PDF generation requires PySide6 PDF support.")
+            return
+
+        # Collect full patient data from the parent form
+        pp = self.parent_page
+        patient_id    = pp.p_id.text().strip()               if pp and hasattr(pp, "p_id")              else ""
+        dob           = pp.p_dob.text()                      if pp and hasattr(pp, "p_dob") and hasattr(pp.p_dob, "text") else ""
+        age           = str(pp.p_age.value())                if pp and hasattr(pp, "p_age")             else ""
+        sex           = pp.p_sex.currentText()               if pp and hasattr(pp, "p_sex")             else ""
+        contact       = pp.p_contact.text().strip()          if pp and hasattr(pp, "p_contact")         else ""
+        diabetes_type = pp.diabetes_type.currentText()       if pp and hasattr(pp, "diabetes_type")     else ""
+        duration      = str(pp.diabetes_duration.value())    if pp and hasattr(pp, "diabetes_duration") else ""
+        hba1c_val     = f"{pp.hba1c.value():.1f}"            if pp and hasattr(pp, "hba1c")             else ""
+        prev_tx       = "Yes" if pp and hasattr(pp, "prev_treatment") and pp.prev_treatment.isChecked() else "No"
+        notes         = pp.notes.toPlainText().strip()       if pp and hasattr(pp, "notes")             else ""
+
+        recommendation = _DR_RECOMMENDATIONS.get(self._current_result_class, "Consult a clinician")
+        grade_color    = _DR_COLORS.get(self._current_result_class, "#1f2937")
+        explanation    = self.explanation.text()
+        screening_date = datetime.now().strftime("%B %d, %Y  %I:%M %p")
+
+        # Build QTextDocument with embedded images
+        doc = QTextDocument()
+        source_img_html  = "<p style='color:#6c757d;'>[Image not available]</p>"
+        heatmap_img_html = "<p style='color:#6c757d;'>[Heatmap not available]</p>"
+
+        if self._current_image_path and os.path.isfile(self._current_image_path):
+            src_px = QPixmap(self._current_image_path).scaled(
+                320, 260, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            )
+            try:
+                doc.addResource(QTextDocument.ResourceType.ImageResource, QUrl("src_img"), src_px)
+            except AttributeError:
+                doc.addResource(QTextDocument.ImageResource, QUrl("src_img"), src_px)
+            source_img_html = '<img src="src_img" />'
+
+        if self._current_heatmap_path and os.path.isfile(self._current_heatmap_path):
+            hmap_px = QPixmap(self._current_heatmap_path).scaled(
+                320, 260, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            )
+            try:
+                doc.addResource(QTextDocument.ResourceType.ImageResource, QUrl("hmap_img"), hmap_px)
+            except AttributeError:
+                doc.addResource(QTextDocument.ImageResource, QUrl("hmap_img"), hmap_px)
+            heatmap_img_html = '<img src="hmap_img" />'
+
+        try:
+            import model_inference as _mi
+            _arch      = _mi._model_architecture
+            _mname     = os.path.basename(_mi.MODEL_PATH)
+            model_info = f"Architecture: {_arch} &nbsp;|&nbsp; Model file: {_mname} &nbsp;|&nbsp; Task: 5-class DR grading"
+        except Exception:
+            model_info = "EyeShield AI Model — offline diabetic retinopathy classification"
+
+        notes_row = (
+            f"<tr><td class='lbl'>Clinical Notes</td><td colspan='3'>{notes}</td></tr>"
+            if notes else ""
+        )
+
+        html = f"""<!DOCTYPE html><html><head><style>
+body    {{ font-family: Arial, sans-serif; font-size: 10pt; color: #212529; margin:0; padding:0; }}
+.hdr    {{ background-color: #1a56db; color: #ffffff; padding: 14px 20px; }}
+.hdr h1 {{ margin: 0; font-size: 16pt; }}
+.hdr p  {{ margin: 3px 0 0 0; font-size: 9.5pt; opacity: 0.9; }}
+.body   {{ padding: 14px 20px; }}
+h2      {{ font-size: 11pt; color: #1a56db; border-bottom: 1px solid #dee2e6;
+           padding-bottom: 3px; margin: 14px 0 7px 0; }}
+table.info  {{ width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 9.5pt; }}
+table.info td {{ padding: 4px 7px; vertical-align: top; border: 1px solid #dee2e6; }}
+td.lbl  {{ font-weight: bold; color: #495057; background-color: #f8f9fa; width: 22%; }}
+table.imgs  {{ width: 100%; border-collapse: collapse; }}
+table.imgs td {{ width: 50%; text-align: center; padding: 6px; vertical-align: top;
+                 border: 1px solid #dee2e6; }}
+.cap    {{ font-size: 8.5pt; color: #6c757d; margin-top: 4px; }}
+.grade  {{ font-weight: bold; font-size: 13pt; color: {grade_color}; }}
+.cbox   {{ background-color: #f0f7ff; border-left: 4px solid #1a56db;
+           padding: 10px 14px; font-size: 9.5pt; color: #333; line-height: 1.55; }}
+.disc   {{ font-size: 8pt; color: #6c757d; font-style: italic;
+           border-top: 1px solid #dee2e6; padding-top: 8px; margin-top: 14px; }}
+.minfo  {{ font-size: 9pt; color: #6c757d; padding: 4px 0; }}
+</style></head><body>
+<div class="hdr">
+  <h1>EyeShield EMR — Diabetic Retinopathy Screening Report</h1>
+  <p>Generated: {screening_date}</p>
+</div>
+<div class="body">
+
+<h2>Patient Information</h2>
+<table class="info">
+  <tr>
+    <td class="lbl">Patient ID</td><td>{patient_id or "—"}</td>
+    <td class="lbl">Patient Name</td><td>{self._current_patient_name or "—"}</td>
+  </tr>
+  <tr>
+    <td class="lbl">Date of Birth</td><td>{dob or "—"}</td>
+    <td class="lbl">Age</td><td>{age or "—"}</td>
+  </tr>
+  <tr>
+    <td class="lbl">Sex</td><td>{sex or "—"}</td>
+    <td class="lbl">Contact</td><td>{contact or "—"}</td>
+  </tr>
+  <tr>
+    <td class="lbl">Eye Screened</td><td>{self._current_eye_label or "—"}</td>
+    <td class="lbl">Screening Date</td><td>{screening_date}</td>
+  </tr>
+</table>
+
+<h2>Clinical History</h2>
+<table class="info">
+  <tr>
+    <td class="lbl">Diabetes Type</td><td>{diabetes_type or "—"}</td>
+    <td class="lbl">Duration</td><td>{f"{duration} year(s)" if duration else "—"}</td>
+  </tr>
+  <tr>
+    <td class="lbl">HbA1c</td><td>{f"{hba1c_val}%" if hba1c_val else "—"}</td>
+    <td class="lbl">Previous Treatment</td><td>{prev_tx}</td>
+  </tr>
+  {notes_row}
+</table>
+
+<h2>AI Analysis Results</h2>
+<table class="info">
+  <tr>
+    <td class="lbl">Classification</td>
+    <td colspan="3"><span class="grade">{self._current_result_class}</span></td>
+  </tr>
+  <tr>
+    <td class="lbl">Confidence</td>
+    <td>{self._current_confidence or "—"}</td>
+    <td class="lbl">Recommendation</td>
+    <td>{recommendation}</td>
+  </tr>
+</table>
+
+<h2>Fundus Images</h2>
+<table class="imgs">
+  <tr>
+    <td>{source_img_html}<div class="cap">Source Fundus Image</div></td>
+    <td>{heatmap_img_html}<div class="cap">Grad-CAM++ Heatmap Overlay</div></td>
+  </tr>
+</table>
+
+<h2>Clinical Summary</h2>
+<div class="cbox">{explanation or "No clinical summary available."}</div>
+
+<h2>AI Model</h2>
+<div class="minfo">{model_info}</div>
+
+<div class="disc">
+This report was generated by EyeShield EMR using an offline AI model for diabetic retinopathy
+screening. It is intended as a clinical aid only and does not replace evaluation by a qualified
+ophthalmologist or healthcare professional. Always verify AI-generated results before acting on this output.
+</div>
+
+</div></body></html>"""
+
+        doc.setHtml(html)
+
+        writer = QPdfWriter(path)
+        try:
+            writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+        except Exception:
+            pass
+        try:
+            writer.setPageMargins(QMarginsF(10, 10, 10, 10), QPageLayout.Unit.Millimeter)
+        except Exception:
+            pass
+        doc.print_(writer)
+
+        QMessageBox.information(
+            self, "Report Saved",
+            f"Screening report saved to:\n{path}"
+        )

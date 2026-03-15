@@ -264,6 +264,10 @@ class ReportsPage(QWidget):
             self.archived_records_btn = None
         top_bar.addWidget(self.refresh_btn)
         top_bar.addWidget(self.export_btn)
+        self.report_btn = QPushButton("Generate Report")
+        self.report_btn.setEnabled(False)
+        self.report_btn.clicked.connect(self.generate_report)
+        top_bar.addWidget(self.report_btn)
 
         root.addLayout(top_bar)
         root.addWidget(self._rep_subtitle_lbl)
@@ -347,7 +351,8 @@ class ReportsPage(QWidget):
         root.addWidget(self._results_group)
 
         self.setTabOrder(self.refresh_btn, self.export_btn)
-        self.setTabOrder(self.export_btn, self.search_input)
+        self.setTabOrder(self.export_btn, self.report_btn)
+        self.setTabOrder(self.report_btn, self.search_input)
         self.setTabOrder(self.search_input, self.result_filter)
         self.setTabOrder(self.result_filter, self.results_table)
 
@@ -541,10 +546,12 @@ class ReportsPage(QWidget):
         return self._record_lookup.get(record_id)
 
     def _update_action_buttons(self):
+        record = self._get_selected_record()
+        self.report_btn.setEnabled(bool(record))
+
         if not self.is_admin:
             return
 
-        record = self._get_selected_record()
         self.archive_btn.setEnabled(bool(record and not record["archived_at"]))
 
     def open_archived_records_window(self):
@@ -723,3 +730,221 @@ class ReportsPage(QWidget):
         self._stat_no_dr_title.setText(pack["rep_stat_no_dr"])
         self._stat_review_title.setText(pack["rep_stat_review"])
         self._stat_hba1c_title.setText(pack["rep_stat_hba1c"])
+
+    # ── Report generation ──────────────────────────────────────────────────────
+
+    def _fetch_full_record(self, record_id: int) -> "dict | None":
+        """Query all columns for a single patient record."""
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            cur  = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, patient_id, name, birthdate, age, sex, contact, eyes,
+                       diabetes_type, duration, hba1c, prev_treatment, notes,
+                       result, confidence
+                FROM patient_records
+                WHERE id = ?
+                """,
+                (record_id,),
+            )
+            row = cur.fetchone()
+            conn.close()
+            if not row:
+                return None
+            return {
+                "id": row[0], "patient_id": row[1], "name": row[2],
+                "birthdate": row[3], "age": row[4], "sex": row[5],
+                "contact": row[6], "eyes": row[7], "diabetes_type": row[8],
+                "duration": row[9], "hba1c": row[10], "prev_treatment": row[11],
+                "notes": row[12], "result": row[13], "confidence": row[14],
+            }
+        except Exception:
+            return None
+
+    def generate_report(self):
+        """Generate a PDF report for the selected patient record."""
+        record = self._get_selected_record()
+        if not record:
+            QMessageBox.information(self, "Generate Report", "Select a patient record to generate a report for.")
+            return
+
+        default_name = (
+            f"EyeShield_Report_{record.get('name', 'Patient')}_"
+            f"{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Patient Report", default_name, "PDF Files (*.pdf)"
+        )
+        if not path:
+            return
+
+        try:
+            from PySide6.QtGui import QPdfWriter, QPageSize, QPageLayout, QTextDocument
+            from PySide6.QtCore import QUrl, QMarginsF
+        except ImportError:
+            QMessageBox.warning(self, "Generate Report", "PDF generation requires PySide6 PDF support.")
+            return
+
+        full = self._fetch_full_record(record["id"]) or record
+
+        name          = str(full.get("name")          or "—")
+        patient_id    = str(full.get("patient_id")    or "—")
+        birthdate     = str(full.get("birthdate")     or "—")
+        age           = str(full.get("age")           or "—")
+        sex           = str(full.get("sex")           or "—")
+        contact       = str(full.get("contact")       or "—")
+        eyes          = str(full.get("eyes")          or "—")
+        diabetes_type = str(full.get("diabetes_type") or "—")
+        duration      = str(full.get("duration")      or "—")
+        hba1c         = str(full.get("hba1c")         or "—")
+        prev_treatment= str(full.get("prev_treatment")or "—")
+        notes         = str(full.get("notes")         or "")
+        result        = str(full.get("result")        or "—")
+        confidence    = str(full.get("confidence")    or "—")
+
+        _DR_REC = {
+            "No DR":            "Annual screening recommended",
+            "Mild DR":          "6–12 month follow-up",
+            "Moderate DR":      "Ophthalmology referral within 3 months",
+            "Severe DR":        "Urgent ophthalmology referral",
+            "Proliferative DR": "Immediate ophthalmology referral",
+        }
+        _DR_COL = {
+            "No DR":            "#198754",
+            "Mild DR":          "#b35a00",
+            "Moderate DR":      "#c1540a",
+            "Severe DR":        "#dc3545",
+            "Proliferative DR": "#842029",
+        }
+        _DR_SUM = {
+            "No DR":
+                "No signs of diabetic retinopathy were detected. Continue standard diabetes management "
+                "and schedule routine annual retinal screening.",
+            "Mild DR":
+                "Early microaneurysms consistent with mild NPDR. Intensify glycaemic and blood pressure "
+                "management; follow-up retinal examination in 6–12 months is recommended.",
+            "Moderate DR":
+                "Features consistent with moderate NPDR detected. Referral to an ophthalmologist within "
+                "3 months is advised. Reassess systemic metabolic control.",
+            "Severe DR":
+                "Severe NPDR findings detected. Risk of progression to proliferative disease within 12 months "
+                "is high. Urgent ophthalmology referral is required.",
+            "Proliferative DR":
+                "Proliferative diabetic retinopathy detected — a sight-threatening condition. Immediate "
+                "ophthalmology referral is required for evaluation and potential intervention.",
+        }
+
+        recommendation = _DR_REC.get(result, "Consult a clinician")
+        grade_color    = _DR_COL.get(result, "#1f2937")
+        summary        = _DR_SUM.get(result, "Please consult a qualified ophthalmologist for interpretation.")
+        report_date    = datetime.now().strftime("%B %d, %Y  %I:%M %p")
+
+        notes_row = (
+            f"<tr><td class='lbl'>Clinical Notes</td><td colspan='3'>{notes}</td></tr>"
+            if notes else ""
+        )
+
+        html = f"""<!DOCTYPE html><html><head><style>
+body    {{ font-family: Arial, sans-serif; font-size: 10pt; color: #212529; margin:0; padding:0; }}
+.hdr    {{ background-color: #1a56db; color: #ffffff; padding: 14px 20px; }}
+.hdr h1 {{ margin: 0; font-size: 16pt; }}
+.hdr p  {{ margin: 3px 0 0 0; font-size: 9.5pt; }}
+.body   {{ padding: 14px 20px; }}
+h2      {{ font-size: 11pt; color: #1a56db; border-bottom: 1px solid #dee2e6;
+           padding-bottom: 3px; margin: 14px 0 7px 0; }}
+table.info  {{ width: 100%; border-collapse: collapse; margin-bottom: 6px; font-size: 9.5pt; }}
+table.info td {{ padding: 4px 7px; vertical-align: top; border: 1px solid #dee2e6; }}
+td.lbl  {{ font-weight: bold; color: #495057; background-color: #f8f9fa; width: 22%; }}
+.grade  {{ font-weight: bold; font-size: 13pt; color: {grade_color}; }}
+.cbox   {{ background-color: #f0f7ff; border-left: 4px solid #1a56db;
+           padding: 10px 14px; font-size: 9.5pt; color: #333; line-height: 1.55; }}
+.disc   {{ font-size: 8pt; color: #6c757d; font-style: italic;
+           border-top: 1px solid #dee2e6; padding-top: 8px; margin-top: 14px; }}
+</style></head><body>
+<div class="hdr">
+  <h1>EyeShield EMR — Patient Screening Report</h1>
+  <p>Generated: {report_date}</p>
+</div>
+<div class="body">
+
+<h2>Patient Information</h2>
+<table class="info">
+  <tr>
+    <td class="lbl">Patient ID</td><td>{patient_id}</td>
+    <td class="lbl">Patient Name</td><td>{name}</td>
+  </tr>
+  <tr>
+    <td class="lbl">Date of Birth</td><td>{birthdate}</td>
+    <td class="lbl">Age</td><td>{age}</td>
+  </tr>
+  <tr>
+    <td class="lbl">Sex</td><td>{sex}</td>
+    <td class="lbl">Contact</td><td>{contact}</td>
+  </tr>
+  <tr>
+    <td class="lbl">Eye(s) Screened</td><td colspan="3">{eyes}</td>
+  </tr>
+</table>
+
+<h2>Clinical History</h2>
+<table class="info">
+  <tr>
+    <td class="lbl">Diabetes Type</td><td>{diabetes_type}</td>
+    <td class="lbl">Duration</td><td>{f"{duration} year(s)" if duration not in ("—","") else "—"}</td>
+  </tr>
+  <tr>
+    <td class="lbl">HbA1c</td><td>{hba1c}</td>
+    <td class="lbl">Previous Treatment</td><td>{prev_treatment}</td>
+  </tr>
+  {notes_row}
+</table>
+
+<h2>Screening Results</h2>
+<table class="info">
+  <tr>
+    <td class="lbl">Classification</td>
+    <td colspan="3"><span class="grade">{result}</span></td>
+  </tr>
+  <tr>
+    <td class="lbl">Confidence</td>
+    <td>{confidence}</td>
+    <td class="lbl">Recommendation</td>
+    <td>{recommendation}</td>
+  </tr>
+  <tr>
+    <td class="lbl">Screening Date</td>
+    <td colspan="3">{report_date}</td>
+  </tr>
+</table>
+
+<h2>Clinical Summary</h2>
+<div class="cbox">{summary}</div>
+
+<div class="disc">
+This report was generated by EyeShield EMR from locally saved screening records.
+It is intended as a clinical aid only and does not replace evaluation by a qualified ophthalmologist
+or healthcare professional. Always verify results before acting on this output.
+</div>
+
+</div></body></html>"""
+
+        doc = QTextDocument()
+        doc.setHtml(html)
+
+        writer = QPdfWriter(path)
+        try:
+            writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+        except Exception:
+            pass
+        try:
+            writer.setPageMargins(QMarginsF(10, 10, 10, 10), QPageLayout.Unit.Millimeter)
+        except Exception:
+            pass
+        doc.print_(writer)
+
+        self.status_label.setText(f"Report saved: {os.path.basename(path)}")
+        QMessageBox.information(
+            self, "Report Saved",
+            f"Patient report saved to:\n{path}"
+        )

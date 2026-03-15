@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QMessageBox,
+    QScrollArea,
+    QFrame,
 )
 
 DARK_STYLESHEET = """
@@ -350,7 +352,17 @@ class SettingsPage(QWidget):
                 font-size: 12px;
             }
         """)
-        layout = QVBoxLayout(self)
+        _outer = QVBoxLayout(self)
+        _outer.setContentsMargins(0, 0, 0, 0)
+        _outer.setSpacing(0)
+
+        _scroll = QScrollArea()
+        _scroll.setWidgetResizable(True)
+        _scroll.setFrameShape(QFrame.Shape.NoFrame)
+        _scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        _inner = QWidget()
+        layout = QVBoxLayout(_inner)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
@@ -449,6 +461,87 @@ class SettingsPage(QWidget):
         about_layout.addWidget(self.about_contact_label)
         layout.addWidget(about_group)
 
+        # ── AI Models ─────────────────────────────────────────────────────
+        models_group = QGroupBox("AI Models")
+        self.models_group = models_group
+        models_layout = QVBoxLayout(models_group)
+        models_layout.setSpacing(6)
+        models_layout.setContentsMargins(12, 12, 12, 12)
+
+        try:
+            import model_inference as _mi
+            _model_dir    = _mi._MODEL_DIR
+            _active_exists = _mi.is_model_available()
+            _active_name  = os.path.basename(_mi.MODEL_PATH)
+            try:
+                _pth_files = sorted(f for f in os.listdir(_model_dir) if f.endswith(".pth"))
+            except OSError:
+                _pth_files = []
+            _arch_names = list(_mi._ARCH_CONFIGS.keys())
+        except Exception:
+            _active_exists = False
+            _active_name   = "DiabeticRetinopathy.pth"
+            _pth_files     = []
+            _arch_names    = ["efficientnet_b0", "efficientnet_b4", "resnet50", "resnet50_mlp"]
+
+        _lbl_style     = "font-size:13px; color:#495057;"
+        _val_ok_style  = "font-size:13px; color:#198754; font-weight:600;"
+        _val_err_style = "font-size:13px; color:#dc3545; font-weight:600;"
+        _head_style    = "font-size:13px; color:#212529; font-weight:600;"
+
+        def _row(key: str, val: str, val_style: str = _lbl_style):
+            row = QHBoxLayout()
+            k = QLabel(key)
+            k.setStyleSheet(_head_style)
+            k.setFixedWidth(180)
+            v = QLabel(val)
+            v.setStyleSheet(val_style)
+            v.setWordWrap(True)
+            row.addWidget(k)
+            row.addWidget(v, 1)
+            return row
+
+        _status_val   = "Present" if _active_exists else "Missing"
+        _status_style = _val_ok_style if _active_exists else _val_err_style
+        models_layout.addLayout(_row("Active model:", _active_name, _lbl_style))
+        models_layout.addLayout(_row("Model status:", _status_val, _status_style))
+
+        if _pth_files:
+            models_layout.addLayout(_row("Available files:", ",  ".join(_pth_files)))
+
+        _algo_map = {
+            "efficientnet_b0":  "EfficientNet-B0  (224×224 input, 5-class DR)",
+            "efficientnet_b4":  "EfficientNet-B4  (380×380 input, 5-class DR)",
+            "resnet50":         "ResNet-50  (224×224 input, linear head)",
+            "resnet50_mlp":     "ResNet-50 + MLP  (224×224 input, 3-layer MLP head)",
+        }
+
+        _sep = QLabel()
+        _sep.setFixedHeight(1)
+        _sep.setStyleSheet("background:#dee2e6; margin: 2px 0;")
+        models_layout.addWidget(_sep)
+
+        _arch_header = QLabel("Supported architectures:")
+        _arch_header.setStyleSheet(_head_style)
+        models_layout.addWidget(_arch_header)
+        for _arch in _arch_names:
+            _arch_lbl = QLabel(f"  •  {_algo_map.get(_arch, _arch)}")
+            _arch_lbl.setStyleSheet(_lbl_style)
+            models_layout.addWidget(_arch_lbl)
+
+        _sep2 = QLabel()
+        _sep2.setFixedHeight(1)
+        _sep2.setStyleSheet("background:#dee2e6; margin: 2px 0;")
+        models_layout.addWidget(_sep2)
+
+        models_layout.addLayout(
+            _row("Grading task:",
+                 "No DR  ·  Mild DR  ·  Moderate DR  ·  Severe DR  ·  Proliferative DR")
+        )
+        models_layout.addLayout(_row("Explainability:", "Grad-CAM++  (offline heatmap overlay)"))
+
+        layout.addWidget(models_group)
+
         # ── Terms of Use ──────────────────────────────────────────────────
         terms_group = QGroupBox("Terms of Use")
         self.terms_group = terms_group
@@ -494,6 +587,8 @@ class SettingsPage(QWidget):
         self.setTabOrder(self.reset_btn, self.save_btn)
 
         layout.addStretch()
+        _scroll.setWidget(_inner)
+        _outer.addWidget(_scroll)
 
     def _language_pack(self, language: str) -> dict:
         from translations import get_pack

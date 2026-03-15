@@ -52,6 +52,11 @@ if __name__ == "__main__":
     # Initialize the database
     UserManager._init_db()
 
+    # Begin loading the DR model in the background so it is warm before the
+    # user navigates to the Screening page (eliminates first-scan delay).
+    from model_inference import preload_model_async
+    preload_model_async()
+
     win = LoginWindow()
     win.show()
 
