@@ -28,6 +28,7 @@ RETFound usage:
 import os
 import tempfile
 import threading
+import warnings
 
 import numpy as np
 import torch
@@ -102,6 +103,52 @@ def _build_retfound_vit() -> nn.Module:
     )
 
 
+class _EDLBackbone(nn.Module):
+    """Thin wrapper that gives the EfficientNet features the 'backbone.features' path."""
+    def __init__(self, features: nn.Sequential):
+        super().__init__()
+        self.features = features
+
+
+class _EDLHead(nn.Module):
+    """3-layer MLP evidence head used by the EDL EfficientNet-B3 model."""
+    def __init__(self, in_features: int, num_classes: int):
+        super().__init__()
+        self.evidence_layer = nn.Sequential(
+            nn.Linear(in_features, 512),   # 0
+            nn.BatchNorm1d(512),           # 1
+            nn.ReLU(),                     # 2
+            nn.Dropout(0.4),              # 3
+            nn.Linear(512, 128),           # 4
+            nn.BatchNorm1d(128),           # 5
+            nn.ReLU(),                     # 6
+            nn.Dropout(0.2),              # 7
+            nn.Linear(128, num_classes),   # 8
+        )
+
+
+class _EDLEfficientNetB3(nn.Module):
+    """EfficientNet-B3 backbone with Evidential Deep Learning head.
+
+    Outputs evidence (non-negative, via softplus) of shape [B, num_classes].
+    For Dirichlet-based uncertainty: alpha = evidence + 1.
+    """
+    def __init__(self):
+        super().__init__()
+        eff = models.efficientnet_b3(weights=None)
+        self.backbone = _EDLBackbone(eff.features)
+        self.edl_head = _EDLHead(1536, len(DR_LABELS))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.backbone.features(x)
+        x = x.mean(dim=[-2, -1])   # global average pool
+        return torch.nn.functional.softplus(self.edl_head.evidence_layer(x))
+
+
+def _build_edl_efficientnet_b3() -> nn.Module:
+    return _EDLEfficientNetB3()
+
+
 _ARCH_CONFIGS = {
     "efficientnet_b0": {
         "builder": models.efficientnet_b0,
@@ -135,10 +182,17 @@ _ARCH_CONFIGS = {
         "input_size": 224,
         "heatmap_layer": "vit_blocks",   # special: hooks model.blocks[-1]
     },
+    # EDL EfficientNet-B3: uncertainty-aware model with Evidential Deep Learning head
+    "edl_efficientnet_b3": {
+        "builder": _build_edl_efficientnet_b3,
+        "classifier_in": 1536,
+        "input_size": 300,
+        "heatmap_layer": "edl_backbone_features",  # special: hooks model.backbone.features[-1]
+    },
 }
 
 _MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-MODEL_PATH = os.path.join(_MODEL_DIR, "DiabeticRetinopathy.pth")
+MODEL_PATH = os.path.join(_MODEL_DIR, "best_model.pt")
 
 _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _model: nn.Module | None = None   # lazy-loaded singleton
@@ -165,7 +219,7 @@ def _build_transform(input_size: int) -> transforms.Compose:
 
 def _unwrap_state_dict(state: object) -> dict[str, torch.Tensor]:
     if isinstance(state, dict):
-        for key in ("model_state_dict", "state_dict", "model"):
+        for key in ("model_state_dict", "state_dict", "model", "model_state"):
             nested = state.get(key)
             if isinstance(nested, dict):
                 state = nested
@@ -177,15 +231,24 @@ def _unwrap_state_dict(state: object) -> dict[str, torch.Tensor]:
     return state
 
 
-def _load_checkpoint_state() -> dict[str, torch.Tensor]:
+def _torch_load(path: str) -> object:
+    """Load a checkpoint, falling back to weights_only=False for older or complex checkpoints."""
     try:
-        state = torch.load(MODEL_PATH, map_location=_device, weights_only=True)
-    except TypeError:
-        state = torch.load(MODEL_PATH, map_location=_device)
-    return _unwrap_state_dict(state)
+        return torch.load(path, map_location=_device, weights_only=True)
+    except Exception:
+        return torch.load(path, map_location=_device, weights_only=False)
+
+
+def _load_checkpoint_state() -> dict[str, torch.Tensor]:
+    return _unwrap_state_dict(_torch_load(MODEL_PATH))
 
 
 def _infer_architecture(state_dict: dict[str, torch.Tensor]) -> str:
+    # EDL EfficientNet-B3: backbone wrapper + evidence head
+    edl_out = state_dict.get("edl_head.evidence_layer.8.weight")
+    if isinstance(edl_out, torch.Tensor) and edl_out.shape[0] == len(DR_LABELS):
+        return "edl_efficientnet_b3"
+
     # RETFound: ViT-Large/16 patch embedding projects 3-channel 16×16 patches → 1024 dims
     patch_embed = state_dict.get("patch_embed.proj.weight")
     if isinstance(patch_embed, torch.Tensor) and tuple(patch_embed.shape) == (1024, 3, 16, 16):
@@ -221,7 +284,7 @@ def _infer_architecture(state_dict: dict[str, torch.Tensor]) -> str:
 
 def _build_model(architecture: str) -> nn.Module:
     config = _ARCH_CONFIGS[architecture]
-    if architecture == "retfound":
+    if architecture in ("retfound", "edl_efficientnet_b3"):
         return config["builder"]()
 
     if architecture.startswith("efficientnet"):
@@ -277,12 +340,15 @@ def load_model() -> nn.Module:
     return net
 
 
-def _get_heatmap_target_layer(model: nn.Module) -> nn.Module:
-    config = _ARCH_CONFIGS[_model_architecture]
+def _get_heatmap_target_layer(model: nn.Module, architecture: str | None = None) -> nn.Module:
+    arch = architecture or _model_architecture
+    config = _ARCH_CONFIGS[arch]
     if config["heatmap_layer"] == "layer4":
         return model.layer4[-1]
     if config["heatmap_layer"] == "vit_blocks":
         return model.blocks[-1]   # last transformer block of ViT
+    if config["heatmap_layer"] == "edl_backbone_features":
+        return model.backbone.features[-1]
     return model.features[-1]
 
 
@@ -371,11 +437,24 @@ def predict_image(image_path: str) -> tuple[str, str, int]:
 
     with torch.inference_mode():
         logits = model(tensor)
-        probs = torch.softmax(logits.float(), dim=1)[0]
 
-    class_idx = int(probs.argmax())
-    confidence = float(probs[class_idx]) * 100.0
-    return DR_LABELS[class_idx], f"Confidence: {confidence:.1f}%", class_idx
+    if _model_architecture == "edl_efficientnet_b3":
+        # logits are evidence (softplus output); compute Dirichlet expected probabilities
+        evidence = logits.float()[0]
+        alpha = evidence + 1.0
+        S = alpha.sum()
+        probs = alpha / S
+        class_idx = int(alpha.argmax())
+        confidence = float(probs[class_idx]) * 100.0
+        vacuity = float(len(DR_LABELS) / S) * 100.0
+        conf_text = f"Confidence: {confidence:.1f}%  |  Uncertainty: {vacuity:.1f}%"
+    else:
+        probs = torch.softmax(logits.float(), dim=1)[0]
+        class_idx = int(probs.argmax())
+        confidence = float(probs[class_idx]) * 100.0
+        conf_text = f"Confidence: {confidence:.1f}%"
+
+    return DR_LABELS[class_idx], conf_text, class_idx
 
 
 def generate_heatmap(image_path: str, class_idx: int) -> str:
@@ -388,24 +467,29 @@ def generate_heatmap(image_path: str, class_idx: int) -> str:
         tensor = tensor.half()
 
     heatmap_path = ""
+    fwd_handle = None
+    bwd_handle = None
     try:
         activations: dict[str, torch.Tensor] = {}
         gradients: dict[str, torch.Tensor] = {}
         target_layer = _get_heatmap_target_layer(model)
 
         fwd_handle = target_layer.register_forward_hook(
-            lambda m, inp, out: activations.__setitem__("A", out)
+            lambda m, inp, out: activations.__setitem__(
+                "A", out[0] if isinstance(out, (tuple, list)) else out
+            )
         )
         bwd_handle = target_layer.register_full_backward_hook(
-            lambda m, gin, gout: gradients.__setitem__("G", gout[0])
+            lambda m, gin, gout: gradients.__setitem__(
+                "G", gout[0] if isinstance(gout, (tuple, list)) else gout
+            )
         )
 
         model.zero_grad()
         logits = model(tensor)
         logits[0, class_idx].backward()
-
-        fwd_handle.remove()
-        bwd_handle.remove()
+        if "A" not in activations or "G" not in gradients:
+            raise RuntimeError("Failed to capture activations/gradients for Grad-CAM++.")
 
         A = activations["A"][0].detach()
         G = gradients["G"][0].detach()
@@ -444,8 +528,14 @@ def generate_heatmap(image_path: str, class_idx: int) -> str:
         Image.fromarray(overlay).save(tmp.name)
         tmp.close()
         heatmap_path = tmp.name
-    except Exception:
+    except Exception as exc:
+        warnings.warn(f"Grad-CAM++ generation failed: {exc}", RuntimeWarning)
         heatmap_path = ""
+    finally:
+        if fwd_handle is not None:
+            fwd_handle.remove()
+        if bwd_handle is not None:
+            bwd_handle.remove()
 
     return heatmap_path
 
@@ -472,3 +562,154 @@ def run_inference(image_path: str) -> tuple[str, str, str]:
     label, confidence_text, class_idx = predict_image(image_path)
     heatmap_path = generate_heatmap(image_path, class_idx)
     return label, confidence_text, heatmap_path
+
+
+# ── Secondary model for side-by-side comparison ───────────────────────────────
+_cmp_model: nn.Module | None = None
+_cmp_model_path: str = ""
+_cmp_architecture: str = ""
+_cmp_input_size: int = 224
+_cmp_lock = threading.Lock()
+
+
+def _load_model_from_path(model_path: str) -> tuple[nn.Module, str, int]:
+    """Load any supported checkpoint from an explicit path. Returns (model, arch, input_size)."""
+    state_dict = _unwrap_state_dict(_torch_load(model_path))
+    architecture = _infer_architecture(state_dict)
+    net = _build_model(architecture)
+    if architecture == "retfound":
+        net.load_state_dict(state_dict, strict=False)
+    else:
+        net.load_state_dict(state_dict)
+    net.to(_device).eval()
+    if _device.type == "cuda":
+        net = net.half()
+    input_size = _ARCH_CONFIGS[architecture]["input_size"]
+    return net, architecture, input_size
+
+
+def run_comparison_inference(image_path: str, model_path: str) -> tuple[str, str, int, str]:
+    """Run inference + Grad-CAM++ using *model_path* as the comparison model.
+
+    Caches the loaded model so repeated calls on the same model_path are fast.
+
+    Returns
+    -------
+    label              : DR classification string
+    confidence_text    : formatted confidence / uncertainty string
+    class_idx          : integer class index (0-4)
+    heatmap_path       : path to a temp PNG overlay, or "" on failure
+    """
+    global _cmp_model, _cmp_model_path, _cmp_architecture, _cmp_input_size
+
+    if not os.path.isfile(model_path):
+        raise FileNotFoundError(f"Comparison model not found:\n{model_path}")
+
+    with _cmp_lock:
+        if _cmp_model is None or _cmp_model_path != model_path:
+            _cmp_model, _cmp_architecture, _cmp_input_size = _load_model_from_path(model_path)
+            _cmp_model_path = model_path
+
+    model = _cmp_model
+    arch = _cmp_architecture
+    input_size = _cmp_input_size
+
+    check_image_quality(image_path)
+    image = Image.open(image_path).convert("RGB")
+    transform = _build_transform(input_size)
+    tensor = transform(image).unsqueeze(0).to(_device)
+    if _device.type == "cuda":
+        tensor = tensor.half()
+
+    with torch.inference_mode():
+        logits = model(tensor)
+
+    if arch == "edl_efficientnet_b3":
+        evidence = logits.float()[0]
+        alpha = evidence + 1.0
+        S = alpha.sum()
+        probs = alpha / S
+        class_idx = int(alpha.argmax())
+        confidence = float(probs[class_idx]) * 100.0
+        vacuity = float(len(DR_LABELS) / S) * 100.0
+        conf_text = f"Confidence: {confidence:.1f}%  |  Uncertainty: {vacuity:.1f}%"
+    else:
+        probs = torch.softmax(logits.float(), dim=1)[0]
+        class_idx = int(probs.argmax())
+        confidence = float(probs[class_idx]) * 100.0
+        conf_text = f"Confidence: {confidence:.1f}%"
+
+    # Grad-CAM++ heatmap
+    heatmap_path = ""
+    fwd_h = None
+    bwd_h = None
+    try:
+        activations: dict[str, torch.Tensor] = {}
+        gradients: dict[str, torch.Tensor] = {}
+        target_layer = _get_heatmap_target_layer(model, arch)
+
+        fwd_h = target_layer.register_forward_hook(
+            lambda m, i, o: activations.__setitem__(
+                "A", o[0] if isinstance(o, (tuple, list)) else o
+            )
+        )
+        bwd_h = target_layer.register_full_backward_hook(
+            lambda m, gi, go: gradients.__setitem__(
+                "G", go[0] if isinstance(go, (tuple, list)) else go
+            )
+        )
+
+        model.zero_grad()
+        logits2 = model(tensor)
+        logits2[0, class_idx].backward()
+        if "A" not in activations or "G" not in gradients:
+            raise RuntimeError("Failed to capture activations/gradients for Grad-CAM++.")
+
+        A = activations["A"][0].detach()
+        G = gradients["G"][0].detach()
+
+        if arch == "retfound":
+            pg = input_size // 16
+            A = A[1:].permute(1, 0).reshape(-1, pg, pg)
+            G = G[1:].permute(1, 0).reshape(-1, pg, pg)
+
+        G2, G3 = G ** 2, G ** 3
+        alpha_cam = G2 / (2 * G2 + A.sum(dim=(1, 2), keepdim=True) * G3 + 1e-7)
+        weights = (alpha_cam * torch.relu(G)).sum(dim=(1, 2))
+        cam = torch.relu((weights[:, None, None] * A).sum(dim=0))
+        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-7)
+        cam_np = cam.cpu().numpy()
+
+        cam_up = np.array(
+            Image.fromarray((cam_np * 255).astype(np.uint8)).resize((input_size, input_size), Image.BILINEAR)
+        ).astype(np.float32) / 255.0
+        heatmap_rgb = _apply_jet(cam_up)
+        orig_np = np.array(image.resize((input_size, input_size), Image.BILINEAR))
+        overlay = (0.55 * orig_np + 0.45 * heatmap_rgb).clip(0, 255).astype(np.uint8)
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, prefix="eyeshield_cmp_")
+        Image.fromarray(overlay).save(tmp.name)
+        tmp.close()
+        heatmap_path = tmp.name
+    except Exception as exc:
+        warnings.warn(f"Comparison Grad-CAM++ generation failed: {exc}", RuntimeWarning)
+        heatmap_path = ""
+    finally:
+        if fwd_h is not None:
+            fwd_h.remove()
+        if bwd_h is not None:
+            bwd_h.remove()
+
+    return DR_LABELS[class_idx], conf_text, class_idx, heatmap_path
+
+
+def list_available_models() -> list[str]:
+    """Return sorted list of model file paths in the models directory."""
+    try:
+        files = sorted(
+            os.path.join(_MODEL_DIR, f)
+            for f in os.listdir(_MODEL_DIR)
+            if f.endswith((".pth", ".pt")) and os.path.getsize(os.path.join(_MODEL_DIR, f)) > 1024
+        )
+    except OSError:
+        files = []
+    return files

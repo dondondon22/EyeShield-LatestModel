@@ -474,7 +474,11 @@ class SettingsPage(QWidget):
             _active_exists = _mi.is_model_available()
             _active_name  = os.path.basename(_mi.MODEL_PATH)
             try:
-                _pth_files = sorted(f for f in os.listdir(_model_dir) if f.endswith(".pth"))
+                _pth_files = sorted(
+                    f for f in os.listdir(_model_dir)
+                    if f.endswith((".pth", ".pt"))
+                    and os.path.getsize(os.path.join(_model_dir, f)) > 1024
+                )
             except OSError:
                 _pth_files = []
             _arch_names = list(_mi._ARCH_CONFIGS.keys())
@@ -510,10 +514,11 @@ class SettingsPage(QWidget):
             models_layout.addLayout(_row("Available files:", ",  ".join(_pth_files)))
 
         _algo_map = {
-            "efficientnet_b0":  "EfficientNet-B0  (224×224 input, 5-class DR)",
-            "efficientnet_b4":  "EfficientNet-B4  (380×380 input, 5-class DR)",
-            "resnet50":         "ResNet-50  (224×224 input, linear head)",
-            "resnet50_mlp":     "ResNet-50 + MLP  (224×224 input, 3-layer MLP head)",
+            "efficientnet_b0":      "EfficientNet-B0  (224×224 input, 5-class DR)",
+            "efficientnet_b4":      "EfficientNet-B4  (380×380 input, 5-class DR)",
+            "resnet50":             "ResNet-50  (224×224 input, linear head)",
+            "resnet50_mlp":         "ResNet-50 + MLP  (224×224 input, 3-layer MLP head)",
+            "edl_efficientnet_b3":  "EfficientNet-B3 + EDL  (300×300 input, uncertainty-aware)",
         }
 
         _sep = QLabel()

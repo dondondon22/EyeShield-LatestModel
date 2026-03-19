@@ -98,6 +98,29 @@ class _InferenceWorker(QThread):
             self.error.emit(str(exc))
 
 
+class _ComparisonWorker(QThread):
+    """Run model_inference.run_comparison_inference() on a background thread."""
+    result_ready = Signal(str, str)          # label, confidence_text
+    finished     = Signal(str, str, int, str) # label, confidence_text, class_idx, heatmap_path
+    error        = Signal(str)
+
+    def __init__(self, image_path: str, model_path: str):
+        super().__init__()
+        self._image_path = image_path
+        self._model_path = model_path
+
+    def run(self):
+        try:
+            from model_inference import run_comparison_inference
+            label, conf, class_idx, heatmap_path = run_comparison_inference(
+                self._image_path, self._model_path
+            )
+            self.result_ready.emit(label, conf)
+            self.finished.emit(label, conf, class_idx, heatmap_path)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 class DrawableZoomLabel(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1812,6 +1835,74 @@ class ResultsWindow(QWidget):
         explanation_layout.addWidget(self.explanation_hint)
         layout.addWidget(explanation_group)
 
+        # ── Model Comparison panel ────────────────────────────────────────────
+        self._cmp_worker: "_ComparisonWorker | None" = None
+        cmp_group = QGroupBox("Model Comparison")
+        cmp_group.setObjectName("cmpGroup")
+        cmp_layout = QVBoxLayout(cmp_group)
+        cmp_layout.setContentsMargins(14, 16, 14, 14)
+        cmp_layout.setSpacing(10)
+
+        cmp_selector_row = QHBoxLayout()
+        cmp_lbl = QLabel("Compare with:")
+        cmp_lbl.setStyleSheet("font-size:13px;font-weight:600;color:#212529;")
+        cmp_lbl.setFixedWidth(110)
+        self._cmp_combo = QComboBox()
+        self._cmp_combo.setMinimumWidth(240)
+        self._btn_run_cmp = QPushButton("Run Comparison")
+        self._btn_run_cmp.setObjectName("primaryAction")
+        self._btn_run_cmp.setMinimumHeight(38)
+        self._btn_run_cmp.setEnabled(False)
+        self._btn_run_cmp.clicked.connect(self._run_comparison)
+        cmp_selector_row.addWidget(cmp_lbl)
+        cmp_selector_row.addWidget(self._cmp_combo, 1)
+        cmp_selector_row.addWidget(self._btn_run_cmp)
+        cmp_layout.addLayout(cmp_selector_row)
+
+        self._cmp_loading_bar = QProgressBar()
+        self._cmp_loading_bar.setRange(0, 0)
+        self._cmp_loading_bar.setFixedHeight(5)
+        self._cmp_loading_bar.setTextVisible(False)
+        self._cmp_loading_bar.setStyleSheet("""
+            QProgressBar { background:#e9ecef; border:none; border-radius:3px; }
+            QProgressBar::chunk { background:#6f42c1; border-radius:3px; }
+        """)
+        self._cmp_loading_bar.hide()
+        cmp_layout.addWidget(self._cmp_loading_bar)
+
+        cmp_results_row = QHBoxLayout()
+        cmp_results_row.setSpacing(14)
+
+        cmp_heatmap_group = QGroupBox("Comparison Heatmap")
+        cmp_heatmap_layout = QVBoxLayout(cmp_heatmap_group)
+        cmp_heatmap_layout.setContentsMargins(10, 14, 10, 10)
+        self._cmp_heatmap_label = ClickableImageLabel("", "Comparison Heatmap")
+        self._cmp_heatmap_label.setMinimumSize(380, 280)
+        self._cmp_heatmap_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._cmp_heatmap_label.setWordWrap(True)
+        cmp_heatmap_layout.addWidget(self._cmp_heatmap_label)
+        cmp_results_row.addWidget(cmp_heatmap_group, 1)
+
+        cmp_stats_col = QVBoxLayout()
+        cmp_stats_col.setSpacing(10)
+        cmp_class_card, self._cmp_class_value = self._create_stat_card("Comparison Grade")
+        cmp_conf_card,  self._cmp_conf_value  = self._create_stat_card("Comparison Confidence")
+        cmp_rec_card,   self._cmp_rec_value   = self._create_stat_card("Recommendation")
+        cmp_stats_col.addWidget(cmp_class_card)
+        cmp_stats_col.addWidget(cmp_conf_card)
+        cmp_stats_col.addWidget(cmp_rec_card)
+        cmp_stats_col.addStretch()
+        cmp_results_row.addLayout(cmp_stats_col, 1)
+        cmp_layout.addLayout(cmp_results_row)
+
+        self._cmp_error_label = QLabel("")
+        self._cmp_error_label.setWordWrap(True)
+        self._cmp_error_label.setStyleSheet("color:#dc3545;font-size:12px;")
+        self._cmp_error_label.hide()
+        cmp_layout.addWidget(self._cmp_error_label)
+        layout.addWidget(cmp_group)
+        self._cmp_group = cmp_group
+
     def _is_dark_theme(self) -> bool:
         bg = self.palette().color(QPalette.ColorRole.Window)
         fg = self.palette().color(QPalette.ColorRole.WindowText)
@@ -1979,6 +2070,70 @@ class ResultsWindow(QWidget):
             and result_class not in ("Analyzing…", "Pending")
         )
         self.btn_report.setEnabled(_report_ready)
+
+        # ── Comparison panel state ────────────────────────────────────────────
+        if is_loading:
+            # New screening started — reset comparison panel
+            self._cmp_class_value.setText("—")
+            self._cmp_conf_value.setText("—")
+            self._cmp_rec_value.setText("—")
+            self._cmp_heatmap_label.clear_view("")
+            self._cmp_error_label.hide()
+            # Populate model list (exclude active model)
+            try:
+                from model_inference import list_available_models, MODEL_PATH as _active_path
+                self._cmp_combo.clear()
+                for mp in list_available_models():
+                    if os.path.abspath(mp) != os.path.abspath(_active_path):
+                        self._cmp_combo.addItem(os.path.basename(mp), mp)
+            except Exception:
+                pass
+            self._btn_run_cmp.setEnabled(False)
+        elif _report_ready:
+            self._btn_run_cmp.setEnabled(self._cmp_combo.count() > 0)
+
+    def _run_comparison(self):
+        if not self._current_image_path:
+            return
+        model_path = self._cmp_combo.currentData()
+        if not model_path:
+            return
+        self._btn_run_cmp.setEnabled(False)
+        self._cmp_loading_bar.show()
+        self._cmp_error_label.hide()
+        self._cmp_class_value.setText("Analyzing…")
+        self._cmp_conf_value.setText("—")
+        self._cmp_rec_value.setText("—")
+        self._cmp_heatmap_label.clear_view("")
+
+        self._cmp_worker = _ComparisonWorker(self._current_image_path, model_path)
+        self._cmp_worker.result_ready.connect(self._on_comparison_result)
+        self._cmp_worker.finished.connect(self._on_comparison_done)
+        self._cmp_worker.error.connect(self._on_comparison_error)
+        self._cmp_worker.start()
+
+    def _on_comparison_result(self, label: str, conf: str):
+        self._cmp_class_value.setText(label)
+        grade_color = _DR_COLORS.get(label, "#1f2937")
+        self._cmp_class_value.setStyleSheet(
+            f"color:{grade_color};font-size:20px;font-weight:700;"
+        )
+        self._cmp_conf_value.setText(conf)
+        self._cmp_rec_value.setText(_DR_RECOMMENDATIONS.get(label, "Consult a clinician"))
+
+    def _on_comparison_done(self, label: str, conf: str, class_idx: int, heatmap_path: str):
+        self._cmp_loading_bar.hide()
+        self._btn_run_cmp.setEnabled(True)
+        self._on_comparison_result(label, conf)
+        if heatmap_path and os.path.isfile(heatmap_path):
+            self._cmp_heatmap_label.set_viewable_pixmap(QPixmap(heatmap_path), 460, 360)
+
+    def _on_comparison_error(self, msg: str):
+        self._cmp_loading_bar.hide()
+        self._btn_run_cmp.setEnabled(True)
+        self._cmp_class_value.setText("Error")
+        self._cmp_error_label.setText(f"Comparison failed: {msg}")
+        self._cmp_error_label.show()
 
     def mark_saved(self, name, eye_label, result_class):
         """Called by ScreeningPage after a successful save to update this panel."""
