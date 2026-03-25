@@ -399,6 +399,11 @@ def generate_heatmap(image_path: str, class_idx: int) -> str:
         # 5. Adjusted blend ratio for better readability (less intense heatmap)
         overlay = (0.70 * orig_np + 0.30 * heatmap_rgb).clip(0, 255).astype(np.uint8)
 
+        # 6. Mask out the empty background to hide corner artifacts
+        gray_orig = orig_np.mean(axis=2)
+        mask = gray_orig > 10
+        overlay[~mask] = orig_np[~mask]
+
         tmp = tempfile.NamedTemporaryFile(
             suffix=".png", delete=False, prefix="eyeshield_cam_"
         )
@@ -566,6 +571,12 @@ def run_comparison_inference(image_path: str, model_path: str) -> tuple[str, str
         
         # 5. Adjusted blend ratio
         overlay = (0.70 * orig_np + 0.30 * heatmap_rgb).clip(0, 255).astype(np.uint8)
+
+        # 6. Mask out the empty background to hide corner artifacts
+        gray_orig = orig_np.mean(axis=2)
+        mask = gray_orig > 10
+        overlay[~mask] = orig_np[~mask]
+
         tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, prefix="eyeshield_cmp_")
         Image.fromarray(overlay).save(tmp.name)
         tmp.close()
