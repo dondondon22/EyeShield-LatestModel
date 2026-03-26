@@ -8,12 +8,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QCheckBox, QMessageBox, QDialog, QFrame
 )
 from PySide6.QtGui import QAction, QIcon, QDesktopServices, QPixmap
-from PySide6.QtCore import Qt, QUrl, QSize
+from PySide6.QtCore import Qt, QUrl, QSize, QTimer
 
 try:
-    from user_auth import verify_user
+    from user_auth import verify_user, get_user_profile
 except Exception:
-    from .user_auth import verify_user
+    from .user_auth import verify_user, get_user_profile
 
 
 def _load_admin_contact():
@@ -206,8 +206,17 @@ class ContactAdminDialog(QDialog):
 class LoginWindow(QWidget):
     """Login window for user authentication"""
 
+    MAX_FAILED_ATTEMPTS = 5
+    LOCKOUT_SECONDS = 30
+
     def __init__(self):
         super().__init__()
+
+        self.failed_attempts = 0
+        self.lockout_remaining_seconds = 0
+        self.lockout_timer = QTimer(self)
+        self.lockout_timer.setInterval(1000)
+        self.lockout_timer.timeout.connect(self._update_lockout_countdown)
 
         self.setWindowTitle("EyeShield - Login")
         self.setFixedSize(500, 480)
@@ -343,6 +352,11 @@ class LoginWindow(QWidget):
             }
         """)
         btn.clicked.connect(self.handle_login)
+        self.sign_in_btn = btn
+
+        self.login_feedback = QLabel("")
+        self.login_feedback.setAlignment(Qt.AlignHCenter)
+        self.login_feedback.setStyleSheet("color: #7d93ab; font-size: 12px; background: transparent;")
 
         # --- Footer ---
         footer_row = QHBoxLayout()
@@ -388,6 +402,8 @@ class LoginWindow(QWidget):
         layout.addSpacing(14)
         layout.addSpacing(24)
         layout.addWidget(btn)
+        layout.addSpacing(8)
+        layout.addWidget(self.login_feedback)
         layout.addSpacing(16)
         layout.addLayout(footer_row)
         layout.addStretch()
@@ -401,16 +417,73 @@ class LoginWindow(QWidget):
         """Handle login button click"""
         from dashboard import EyeShieldApp
 
+        if self.lockout_remaining_seconds > 0:
+            QMessageBox.warning(
+                self,
+                "Login Locked",
+                f"Too many failed attempts. Please wait {self.lockout_remaining_seconds} seconds.",
+            )
+            return
+
+        username = self.username_input.text().strip()
         role = verify_user(
-            self.username_input.text(),
+            username,
             self.password_input.text()
         )
 
         if role:
-            os.environ["EYESHIELD_CURRENT_USER"] = self.username_input.text().strip()
+            self.failed_attempts = 0
+            self.login_feedback.setText("")
+            profile = get_user_profile(username) or {}
+            display_name = str(profile.get("full_name") or username).strip()
+
+            os.environ["EYESHIELD_CURRENT_USER"] = username
             os.environ["EYESHIELD_CURRENT_ROLE"] = role
-            self.main = EyeShieldApp(self.username_input.text(), role)
+            os.environ["EYESHIELD_CURRENT_NAME"] = display_name
+            self.main = EyeShieldApp(username, role, display_name=display_name)
             self.main.show()
             self.close()
         else:
-            QMessageBox.warning(self, "Login Failed", "Invalid credentials.")
+            self.failed_attempts += 1
+            remaining_attempts = self.MAX_FAILED_ATTEMPTS - self.failed_attempts
+            if remaining_attempts <= 0:
+                self._start_lockout()
+                return
+
+            self.login_feedback.setText(f"Attempts remaining: {remaining_attempts}")
+            QMessageBox.warning(
+                self,
+                "Login Failed",
+                f"Invalid credentials. You have {remaining_attempts} attempt(s) remaining.",
+            )
+
+    def _set_login_inputs_enabled(self, enabled: bool):
+        self.username_input.setEnabled(enabled)
+        self.password_input.setEnabled(enabled)
+        self.sign_in_btn.setEnabled(enabled)
+
+    def _start_lockout(self):
+        self.lockout_remaining_seconds = self.LOCKOUT_SECONDS
+        self._set_login_inputs_enabled(False)
+        self._update_lockout_feedback()
+        self.lockout_timer.start()
+        QMessageBox.warning(
+            self,
+            "Too Many Attempts",
+            f"Too many failed login attempts. Login is locked for {self.LOCKOUT_SECONDS} seconds.",
+        )
+
+    def _update_lockout_feedback(self):
+        self.login_feedback.setText(f"Login locked. Try again in {self.lockout_remaining_seconds}s")
+
+    def _update_lockout_countdown(self):
+        self.lockout_remaining_seconds -= 1
+        if self.lockout_remaining_seconds > 0:
+            self._update_lockout_feedback()
+            return
+
+        self.lockout_timer.stop()
+        self.failed_attempts = 0
+        self.lockout_remaining_seconds = 0
+        self._set_login_inputs_enabled(True)
+        self.login_feedback.setText("You can try signing in again.")

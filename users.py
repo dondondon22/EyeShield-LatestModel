@@ -173,8 +173,8 @@ class UserManager:
     """Thin UI-layer wrapper around user_store."""
 
     @staticmethod
-    def create_user(username, password, role, acting_username=None, acting_role=None, acting_password=None):
-        return user_store.add_user(username, password, role, acting_username, acting_role, acting_password)
+    def create_user(username, password, role, full_name, acting_username=None, acting_role=None, acting_password=None):
+        return user_store.add_user(username, password, role, full_name, acting_username, acting_role, acting_password)
 
     @staticmethod
     def get_all_users():
@@ -219,6 +219,8 @@ class NewUserDialog(QDialog):
 
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("3â€“32 chars: letters, digits, _ . -")
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Display name shown across the app")
         self.password_input = QLineEdit()
         self.password_input.setPlaceholderText("Min 12 chars")
         self.password_input.setEchoMode(QLineEdit.Password)
@@ -229,7 +231,8 @@ class NewUserDialog(QDialog):
         _add_eye_toggle(self.confirm_password_input)
         self.role_input = QComboBox()
         self.role_input.addItems(_assignable_roles())
-
+        
+        form.addRow("Name:", self.name_input)
         form.addRow("Username:", self.username_input)
         form.addRow("Password:", self.password_input)
         form.addRow("Confirm:", self.confirm_password_input)
@@ -256,12 +259,13 @@ class NewUserDialog(QDialog):
 
     def _create_user(self):
         username = self.username_input.text().strip()
+        full_name = self.name_input.text().strip()
         password = self.password_input.text()
         role = self.role_input.currentText()
 
         # ── Field presence ────────────────────────────────────────────
-        if not username or not password:
-            QMessageBox.warning(self, "Missing Fields", "Username and password are required.")
+        if not username or not full_name or not password:
+            QMessageBox.warning(self, "Missing Fields", "Name, username, and password are required.")
             return
 
         # ── Username format (mirrors auth.py USERNAME_PATTERN) ────────
@@ -316,6 +320,16 @@ class NewUserDialog(QDialog):
             return
 
         # ── Admin password confirmation ───────────────────────────────
+        proceed = QMessageBox.question(
+            self,
+            "Confirm Account Creation",
+            f"Create account for <b>{full_name}</b> with role <b>{role}</b>?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if proceed != QMessageBox.Yes:
+            return
+
         acting_password = UsersPage.prompt_for_admin_password(self, "create this account")
         if acting_password is None:
             return
@@ -330,6 +344,7 @@ class NewUserDialog(QDialog):
         # ── Create ────────────────────────────────────────────────────
         success = UserManager.create_user(
             username, password, role,
+            full_name,
             acting_username=acting_username,
             acting_role=acting_role,
             acting_password=acting_password,
@@ -343,7 +358,7 @@ class NewUserDialog(QDialog):
                 parent._set_status(f"User '{username}' created successfully")
             QMessageBox.information(
                 self, "Account Created",
-                f"User account '{username}' ({role}) was created successfully.",
+                f"User account '{full_name}' ({role}) was created successfully.",
             )
             self.accept()
         else:
@@ -511,8 +526,8 @@ class UsersPage(QWidget):
         table_vbox = QVBoxLayout(self._usr_table_group)
         table_vbox.setSpacing(8)
 
-        self.users_table = QTableWidget(0, 3)
-        self.users_table.setHorizontalHeaderLabels(["Username", "Role", "Status"])
+        self.users_table = QTableWidget(0, 4)
+        self.users_table.setHorizontalHeaderLabels(["Name", "Username", "Role", "Status"])
         self.users_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.users_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.users_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -522,6 +537,7 @@ class UsersPage(QWidget):
         self.users_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.users_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.users_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.users_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.users_table.setMinimumHeight(240)
         table_vbox.addWidget(self.users_table)
 
@@ -623,6 +639,8 @@ class UsersPage(QWidget):
             row = self.users_table.rowCount()
             self.users_table.insertRow(row)
 
+            name_item = QTableWidgetItem(user.get("full_name") or user["username"])
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             username_item = QTableWidgetItem(user["username"])
             username_item.setFlags(username_item.flags() & ~Qt.ItemIsEditable)
 
@@ -639,16 +657,17 @@ class UsersPage(QWidget):
             status_item.setTextAlignment(Qt.AlignCenter)
             status_item.setForeground(QColor("#198754"))
 
-            self.users_table.setItem(row, 0, username_item)
-            self.users_table.setItem(row, 1, role_item)
-            self.users_table.setItem(row, 2, status_item)
+            self.users_table.setItem(row, 0, name_item)
+            self.users_table.setItem(row, 1, username_item)
+            self.users_table.setItem(row, 2, role_item)
+            self.users_table.setItem(row, 3, status_item)
 
             role_badge = QLabel(role)
             role_badge.setAlignment(Qt.AlignCenter)
             role_badge.setStyleSheet(
                 f"color:{fg}; background:{bg}; border-radius:6px; padding:4px 8px; font-weight:600;"
             )
-            self.users_table.setCellWidget(row, 1, role_badge)
+            self.users_table.setCellWidget(row, 2, role_badge)
         self.users_table.resizeRowsToContents()
 
     # â”€â”€ CRUD Actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -659,8 +678,8 @@ class UsersPage(QWidget):
             QMessageBox.warning(self, "No Selection", "Please select a user to delete.")
             return
 
-        username_item = self.users_table.item(row, 0)
-        role_item = self.users_table.item(row, 1)
+        username_item = self.users_table.item(row, 1)
+        role_item = self.users_table.item(row, 2)
         if not username_item or not role_item:
             return
 
@@ -707,8 +726,8 @@ class UsersPage(QWidget):
             QMessageBox.warning(self, "No Selection", "Please select a user to change their role.")
             return
 
-        username_item = self.users_table.item(row, 0)
-        role_item = self.users_table.item(row, 1)
+        username_item = self.users_table.item(row, 1)
+        role_item = self.users_table.item(row, 2)
         if not username_item or not role_item:
             return
 
@@ -720,6 +739,16 @@ class UsersPage(QWidget):
             return
         new_role = dlg.selected_role()
         if new_role == current_role_val:
+            return
+
+        proceed = QMessageBox.question(
+            self,
+            "Confirm Role Change",
+            f"Change role for '<b>{username}</b>' from <b>{current_role_val}</b> to <b>{new_role}</b>?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if proceed != QMessageBox.Yes:
             return
 
         acting_password = self.prompt_for_admin_password(
@@ -751,13 +780,23 @@ class UsersPage(QWidget):
         if row == -1:
             QMessageBox.warning(self, "No Selection", "Please select a user to reset their password.")
             return
-        username_item = self.users_table.item(row, 0)
+        username_item = self.users_table.item(row, 1)
         if not username_item:
             return
         username = username_item.text()
 
         dlg = ResetPasswordDialog(username, parent=self)
         if dlg.exec() != QDialog.Accepted:
+            return
+
+        proceed = QMessageBox.question(
+            self,
+            "Confirm Password Reset",
+            f"Reset password for '<b>{username}</b>' now?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if proceed != QMessageBox.Yes:
             return
 
         acting_password = self.prompt_for_admin_password(self, f"reset '{username}' password")

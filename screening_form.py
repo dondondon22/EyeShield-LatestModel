@@ -350,7 +350,7 @@ class ScreeningPage(QWidget):
             row.setSpacing(8)
             title = QLabel(text.upper())
             title.setStyleSheet(
-                "font-size:10px;font-weight:700;letter-spacing:1.4px;"
+                "font-size:13px;font-weight:700;letter-spacing:1.2px;"
                 "color:#3f7ca7;background:transparent;"
             )
             if key:
@@ -645,7 +645,7 @@ class ScreeningPage(QWidget):
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f8fbff, stop:1 #eef5ff);
                 color: #0b5ed7;
                 padding: 12px;
-                font-size: 12px;
+                font-size: 14px;
                 font-weight: 600;
             }}
             """

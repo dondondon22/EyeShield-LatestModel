@@ -18,44 +18,44 @@ from PySide6.QtWidgets import (
 DARK_STYLESHEET = """
     /* ---- Base ---- */
     QWidget {
-        background: #1e1e2e;
-        color: #cdd6f4;
+        background: #20242b;
+        color: #d6dbe4;
     }
     QMainWindow, QStackedWidget {
-        background: #1e1e2e;
+        background: #20242b;
     }
 
     /* ---- Inputs ---- */
     QLineEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {
-        background: #313244;
-        color: #cdd6f4;
-        border: 1px solid #45475a;
+        background: #2a3038;
+        color: #d6dbe4;
+        border: 1px solid #3e4652;
         border-radius: 8px;
         padding: 8px;
-        selection-background-color: #585b70;
+        selection-background-color: #4b5563;
     }
     QLineEdit:focus, QTextEdit:focus, QComboBox:focus,
     QSpinBox:focus, QDoubleSpinBox:focus {
-        border: 1px solid #89b4fa;
+        border: 1px solid #7ea6d9;
     }
     QComboBox QAbstractItemView {
-        background: #313244;
-        color: #cdd6f4;
-        selection-background-color: #45475a;
+        background: #2a3038;
+        color: #d6dbe4;
+        selection-background-color: #3e4652;
     }
 
     /* ---- Tables ---- */
     QTableWidget {
-        background: #313244;
-        alternate-background-color: #2a2a3c;
-        color: #cdd6f4;
-        gridline-color: #45475a;
-        border: 1px solid #45475a;
+        background: #2a3038;
+        alternate-background-color: #252b33;
+        color: #d6dbe4;
+        gridline-color: #3e4652;
+        border: 1px solid #3e4652;
         border-radius: 8px;
     }
     QHeaderView::section {
-        background: #363649;
-        color: #bac2de;
+        background: #303744;
+        color: #c7cfdb;
         padding: 8px;
         border: none;
     }
@@ -65,63 +65,63 @@ DARK_STYLESHEET = """
 
     /* ---- Group boxes ---- */
     QGroupBox {
-        background: #262637;
-        border: 1px solid #45475a;
+        background: #242a33;
+        border: 1px solid #3e4652;
         border-radius: 8px;
         margin-top: 10px;
-        color: #89b4fa;
+        color: #7ea6d9;
     }
     QGroupBox::title {
         subcontrol-origin: margin;
         left: 12px;
         padding: 0 8px;
-        color: #89b4fa;
+        color: #7ea6d9;
     }
 
     /* ---- Buttons ---- */
     QPushButton {
-        background: #45475a;
-        color: #cdd6f4;
-        border: 1px solid #585b70;
+        background: #3e4652;
+        color: #d6dbe4;
+        border: 1px solid #4b5563;
         border-radius: 8px;
         padding: 8px 16px;
     }
     QPushButton:hover {
-        background: #585b70;
+        background: #4b5563;
     }
     QPushButton:focus {
-        border: 1px solid #89b4fa;
+        border: 1px solid #7ea6d9;
     }
     QPushButton:disabled {
-        background: #313244;
-        color: #6c7086;
-        border: 1px solid #45475a;
+        background: #2a3038;
+        color: #7a8594;
+        border: 1px solid #3e4652;
     }
     QPushButton#primaryAction {
-        background: #89b4fa;
-        color: #1e1e2e;
-        border: 1px solid #74c7ec;
+        background: #5f8fc4;
+        color: #f4f7fb;
+        border: 1px solid #6ea0d8;
     }
     QPushButton#primaryAction:hover {
-        background: #74c7ec;
+        background: #6a9bd3;
     }
     QPushButton#dangerAction {
-        background: #262637;
-        color: #f38ba8;
-        border: 1px solid #f38ba8;
+        background: #2b2a31;
+        color: #e4a1b1;
+        border: 1px solid #d18a9a;
     }
     QPushButton#dangerAction:hover {
-        background: #2e2030;
+        background: #35303a;
     }
     QPushButton#logoutBtn {
-        background: #f38ba8;
-        color: #1e1e2e;
-        border: 1px solid #eba0ac;
+        background: #cf7288;
+        color: #f7f9fc;
+        border: 1px solid #bf667c;
         border-radius: 8px;
         padding: 8px 16px;
     }
     QPushButton#logoutBtn:hover {
-        background: #eba0ac;
+        background: #d47f94;
     }
 
     /* ---- Labels ---- */
@@ -146,7 +146,7 @@ DARK_STYLESHEET = """
         color: #a6adc8;
     }
     QLabel#appTitle {
-        color: #89b4fa;
+        color: #7ea6d9;
         margin-right: 24px;
     }
     QLabel#userInfo {
@@ -165,7 +165,7 @@ DARK_STYLESHEET = """
         font-style: italic;
     }
     QLabel#dashDate {
-        color: #89b4fa;
+        color: #7ea6d9;
     }
     QLabel#insightLabel {
         color: #a6adc8;
@@ -182,7 +182,7 @@ DARK_STYLESHEET = """
 
     /* ---- Keep Settings text metrics identical to light mode ---- */
     QLabel#headerTitle {
-        color: #89b4fa;
+        color: #7ea6d9;
         font-size: 24px;
         font-weight: 700;
     }
@@ -215,45 +215,45 @@ DARK_STYLESHEET = """
     QCheckBox::indicator {
         width: 18px;
         height: 18px;
-        border: 1px solid #6c7086;
+        border: 1px solid #758192;
         border-radius: 4px;
-        background: #313244;
+        background: #2a3038;
     }
     QCheckBox::indicator:checked {
-        background: #89b4fa;
-        border: 1px solid #74c7ec;
+        background: #7ea6d9;
+        border: 1px solid #6ea0d8;
     }
 
     /* ---- Scroll areas ---- */
     QScrollArea {
-        background: #1e1e2e;
+        background: #20242b;
         border: none;
     }
     QScrollBar:vertical {
-        background: #313244;
+        background: #2a3038;
         width: 10px;
         border-radius: 5px;
     }
     QScrollBar::handle:vertical {
-        background: #585b70;
+        background: #4b5563;
         border-radius: 5px;
     }
 
     /* ---- Calendar ---- */
     QCalendarWidget {
-        background: #313244;
-        color: #cdd6f4;
+        background: #2a3038;
+        color: #d6dbe4;
     }
 
     /* ---- Dashboard tiles ---- */
     QWidget#dashTile {
-        background: #262637;
-        border: 1px solid #45475a;
+        background: #242a33;
+        border: 1px solid #3e4652;
         border-radius: 8px;
     }
     QWidget#navBar {
-        background: #181825;
-        border-bottom: 1px solid #45475a;
+        background: #1c2128;
+        border-bottom: 1px solid #3e4652;
     }
 
     /* ---- Video widget ---- */
@@ -263,13 +263,13 @@ DARK_STYLESHEET = """
 
     /* ---- Dialogs / Message boxes ---- */
     QDialog {
-        background: #1e1e2e;
+        background: #20242b;
     }
     QMessageBox {
-        background: #1e1e2e;
+        background: #20242b;
     }
     QMessageBox QLabel {
-        color: #cdd6f4;
+        color: #d6dbe4;
     }
 """
 
@@ -385,7 +385,7 @@ class SettingsPage(QWidget):
         pref_layout.addWidget(self.theme_combo)
 
         self.lang_combo = QComboBox()
-        self.lang_combo.addItems(["English", "Filipino"])
+        self.lang_combo.addItems(["English"])
         self.language_label = QLabel("Language:")
         self.language_label.setObjectName("fieldLabel")
         pref_layout.addWidget(self.language_label)
@@ -548,7 +548,10 @@ class SettingsPage(QWidget):
                 pass
 
         self.theme_combo.setCurrentText(settings.get("theme", "Light"))
-        self.lang_combo.setCurrentText(settings.get("language", "English"))
+        saved_language = settings.get("language", "English")
+        if saved_language not in {self.lang_combo.itemText(i) for i in range(self.lang_combo.count())}:
+            saved_language = "English"
+        self.lang_combo.setCurrentText(saved_language)
         self.apply_live_preview()
         self.status_label.setText("Settings loaded")
 

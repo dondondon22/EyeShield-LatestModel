@@ -1258,7 +1258,10 @@ class ResultsWindow(QWidget):
             explanation_html = escape(summary_map.get(result_raw, "Please consult a qualified ophthalmologist."))
 
         report_date = datetime.now().strftime("%B %d, %Y %I:%M %p")
-        screened_by_raw = str(os.environ.get("EYESHIELD_CURRENT_USER", "")).strip()
+        screened_by_raw = str(
+            os.environ.get("EYESHIELD_CURRENT_NAME", "")
+            or os.environ.get("EYESHIELD_CURRENT_USER", "")
+        ).strip()
         screened_by = escape(screened_by_raw) if screened_by_raw else "&mdash;"
 
         duration_disp = f"{escape(str(duration_val))} year(s)" if duration_val and duration_val > 0 else "&mdash;"

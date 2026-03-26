@@ -8,7 +8,10 @@ class UserStore:
     @classmethod
     def load_users(cls):
         users = AuthUserManager.get_all_users()
-        return [{"username": username, "role": role} for username, role in users]
+        return [
+            {"username": username, "full_name": full_name or username, "role": role}
+            for username, full_name, role in users
+        ]
 
     @classmethod
     def save_users(cls, users):
@@ -27,6 +30,7 @@ class UserStore:
         username,
         password,
         role,
+        full_name,
         acting_username=None,
         acting_role=None,
         acting_password=None,
@@ -36,6 +40,7 @@ class UserStore:
             username,
             password,
             role,
+            full_name=full_name,
             acting_username=acting_username,
             acting_role=acting_role,
             acting_password=acting_password,

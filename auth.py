@@ -118,6 +118,10 @@ def hash_password(password: str) -> str:
 class UserManager:
     """Manages user database operations"""
 
+    _USER_COLUMNS = {
+        "full_name": "TEXT",
+    }
+
     _PATIENT_RECORD_COLUMNS = {
         "archived_at": "TEXT",
         "archived_by": "TEXT",
@@ -160,6 +164,8 @@ class UserManager:
             )
         """)
 
+        UserManager._ensure_user_columns(conn)
+
         # Patient records table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS patient_records (
@@ -192,6 +198,20 @@ class UserManager:
         UserManager._ensure_admin_user(conn, first_run)
 
         return conn
+
+    @staticmethod
+    def _ensure_user_columns(conn: sqlite3.Connection) -> None:
+        """Add profile columns for existing users table and backfill safe defaults."""
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(users)")
+        existing_columns = {row[1] for row in cur.fetchall()}
+
+        for column_name, column_type in UserManager._USER_COLUMNS.items():
+            if column_name in existing_columns:
+                continue
+            cur.execute(f"ALTER TABLE users ADD COLUMN {column_name} {column_type}")
+
+        cur.execute("UPDATE users SET full_name = username WHERE full_name IS NULL OR TRIM(full_name) = ''")
 
     @staticmethod
     def _ensure_patient_record_columns(conn: sqlite3.Connection) -> None:
@@ -228,6 +248,7 @@ class UserManager:
             if not isinstance(user, dict):
                 continue
             username = str(user.get("username", "")).strip()
+            full_name = str(user.get("full_name") or user.get("name") or username).strip()
             raw_password = str(user.get("password", ""))
             role = str(user.get("role", "clinician") or "clinician")
             if not username or not raw_password:
@@ -243,8 +264,8 @@ class UserManager:
                 password_hash = PasswordManager.hash_password(raw_password)
 
             cur.execute(
-                "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-                (username, password_hash, role),
+                "INSERT INTO users (username, full_name, password_hash, role) VALUES (?, ?, ?, ?)",
+                (username, full_name or username, password_hash, role),
             )
         conn.commit()
 
@@ -265,8 +286,8 @@ class UserManager:
 
         password_hash = PasswordManager.hash_password(password)
         cur.execute(
-            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-            (username, password_hash, "admin"),
+            "INSERT INTO users (username, full_name, password_hash, role) VALUES (?, ?, ?, ?)",
+            (username, "Administrator", password_hash, "admin"),
         )
         conn.commit()
 
@@ -345,15 +366,17 @@ class UserManager:
         username: str,
         password: str,
         role: str = "clinician",
+        full_name: Optional[str] = None,
         acting_username: Optional[str] = None,
         acting_role: Optional[str] = None,
         acting_password: Optional[str] = None,
     ) -> bool:
         """Create a new user"""
         username = username.strip()
+        display_name = str(full_name or "").strip()
         normalized_role = UserManager._normalize_role(role)
 
-        if not username or not password or not normalized_role:
+        if not username or not password or not normalized_role or not display_name:
             return False
         if not UserManager._is_valid_username(username):
             return False
@@ -373,8 +396,8 @@ class UserManager:
         
         try:
             cur.execute(
-                "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-                (username, pw_hash, normalized_role)
+                "INSERT INTO users (username, full_name, password_hash, role) VALUES (?, ?, ?, ?)",
+                (username, display_name, pw_hash, normalized_role)
             )
             conn.commit()
             success = True
@@ -417,6 +440,26 @@ class UserManager:
 
         conn.close()
         return None
+
+    @staticmethod
+    def get_user_profile(username: str) -> Optional[dict]:
+        """Return profile details for a username."""
+        username = str(username or "").strip()
+        if not username:
+            return None
+
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT username, full_name, role FROM users WHERE username = ?", (username,))
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "username": row[0],
+            "full_name": row[1] or row[0],
+            "role": row[2],
+        }
     
     @staticmethod
     def get_all_users() -> list[tuple]:
@@ -424,7 +467,7 @@ class UserManager:
         conn = get_connection()
         cur = conn.cursor()
         
-        cur.execute("SELECT username, role FROM users")
+        cur.execute("SELECT username, full_name, role FROM users")
         users = cur.fetchall()
         
         conn.close()

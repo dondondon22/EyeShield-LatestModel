@@ -171,9 +171,10 @@ class ArchivedRecordsDialog(QDialog):
 class ReportsPage(QWidget):
     """Reports page with local offline statistics."""
 
-    def __init__(self, username: str = "", role: str = "clinician"):
+    def __init__(self, username: str = "", role: str = "clinician", display_name: str = ""):
         super().__init__()
         self.username = username or os.environ.get("EYESHIELD_CURRENT_USER", "")
+        self.display_name = display_name or os.environ.get("EYESHIELD_CURRENT_NAME", "") or self.username
         self.role = role or os.environ.get("EYESHIELD_CURRENT_ROLE", "clinician")
         self.is_admin = self.role == "admin"
         self.records_changed_callback = None
@@ -503,7 +504,7 @@ class ReportsPage(QWidget):
         return success
 
     def _set_record_archive_state(self, record_id, archived: bool) -> bool:
-        actor = self.username or os.environ.get("EYESHIELD_CURRENT_USER", "")
+        actor = self.display_name or os.environ.get("EYESHIELD_CURRENT_NAME", "") or self.username
         try:
             conn = sqlite3.connect(DB_FILE)
             cur = conn.cursor()
@@ -680,7 +681,9 @@ class ReportsPage(QWidget):
             gbg = gb
 
         report_date = datetime.now().strftime("%B %d, %Y  %I:%M %p")
-        screened_by_raw = str(self.username or os.environ.get("EYESHIELD_CURRENT_USER","")).strip()
+        screened_by_raw = str(
+            self.display_name or os.environ.get("EYESHIELD_CURRENT_NAME", "") or self.username
+        ).strip()
         screened_by = escape(screened_by_raw) if screened_by_raw else "&#8212;"
 
         dur_raw = str(full.get("duration") or "").strip()
