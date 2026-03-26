@@ -1465,11 +1465,39 @@ class EyeShieldApp(QMainWindow):
                 f"  border: 1px solid {card_border}; border-radius: 12px; }}"
             )
 
-        if hasattr(self, "_dash_recent_title_lbl"):
-            self._dash_recent_title_lbl.setStyleSheet(
-                f"color: {text_secondary}; font-size: 10px; font-weight: 700;"
-                "letter-spacing: 0.9px; text-transform: uppercase; background: transparent;"
-            )
+        metric_defs = {
+            "impactHigh": ("High Risk", high_risk_count, "#ce3e3e" if not dark else "#ff6b6b"),
+            "impactAbnormal": ("Abnormal", abnormal_count, "#d99610" if not dark else "#f2c96d"),
+            "impactClear": ("No DR", no_dr_count, sev_green),
+        }
+        for chip_name, (title_text, value, accent) in metric_defs.items():
+            chip = self.findChild(QWidget, chip_name)
+            title = self.findChild(QLabel, f"{chip_name}_title")
+            value_lbl = self.findChild(QLabel, f"{chip_name}_value")
+            sub_lbl = self.findChild(QLabel, f"{chip_name}_sub")
+            if chip:
+                chip.setStyleSheet(
+                    f"QWidget#{chip_name} {{ background-color: {card_bg};"
+                    f" border: 1px solid {card_border};"
+                    " border-radius: 10px; }"
+                )
+            if title:
+                title.setText(title_text)
+                title.setStyleSheet(
+                    f"font-size: 10px; color: {text_secondary}; font-weight: 700;"
+                    "text-transform: uppercase; letter-spacing: 0.8px; background: transparent;"
+                )
+            if value_lbl:
+                value_lbl.setText(str(value))
+                value_lbl.setStyleSheet(
+                    f"font-size: 24px; color: {text_primary}; font-weight: 800; background: transparent;"
+                )
+            if sub_lbl:
+                pct = (value / total) * 100 if total else 0.0
+                sub_lbl.setText(f"{pct:.1f}% of total")
+                sub_lbl.setStyleSheet(
+                    f"font-size: 11px; color: {text_muted}; font-weight: 600; background: transparent;"
+                )
 
         # Populate Recent Screenings list
         if hasattr(self, "recent_list_layout"):

@@ -35,13 +35,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
-from PIL import Image
-
-try:
-    import timm as _timm
-    _TIMM_AVAILABLE = True
-except ImportError:
-    _TIMM_AVAILABLE = False
+from PIL import Image, ImageFilter
 
 # ── Speed: use all available CPU cores for intra-op parallelism ───────────────
 torch.set_num_threads(min(torch.get_num_threads(), os.cpu_count() or 4))
@@ -66,44 +60,6 @@ DR_LABELS = [
 ]
 
 # ── Supported checkpoint layouts ─────────────────────────────────────────────
-def _build_resnet50_linear() -> nn.Module:
-    net = models.resnet50(weights=None)
-    net.fc = nn.Linear(net.fc.in_features, len(DR_LABELS))
-    return net
-
-
-def _build_resnet50_mlp() -> nn.Module:
-    net = models.resnet50(weights=None)
-    net.fc = nn.Sequential(
-        nn.Linear(net.fc.in_features, 1024),
-        nn.ReLU(),
-        nn.BatchNorm1d(1024),
-        nn.Dropout(0.5),
-        nn.Linear(1024, 512),
-        nn.ReLU(),
-        nn.BatchNorm1d(512),
-        nn.Dropout(0.3),
-        nn.Linear(512, len(DR_LABELS)),
-    )
-    return net
-
-
-def _build_retfound_vit() -> nn.Module:
-    """Build a ViT-Large/16 with global-average-pool head matching RETFound fine-tuned weights."""
-    if not _TIMM_AVAILABLE:
-        raise ImportError(
-            "The timm package is required to load a RETFound checkpoint.\n"
-            "Install it with:  pip install timm"
-        )
-    # global_pool='avg' matches RETFound's fine-tuning setup (mean of patch tokens, no CLS)
-    return _timm.create_model(
-        "vit_large_patch16_224",
-        num_classes=len(DR_LABELS),
-        global_pool="avg",
-        pretrained=False,
-    )
-
-
 class _EDLBackbone(nn.Module):
     """Thin wrapper that gives the EfficientNet features the 'backbone.features' path."""
     def __init__(self, features: nn.Sequential):
@@ -151,38 +107,6 @@ def _build_edl_efficientnet_b3() -> nn.Module:
 
 
 _ARCH_CONFIGS = {
-    "efficientnet_b0": {
-        "builder": models.efficientnet_b0,
-        "classifier_in": 1280,
-        "input_size": 224,
-        "heatmap_layer": "features",
-    },
-    "efficientnet_b4": {
-        "builder": models.efficientnet_b4,
-        "classifier_in": 1792,
-        "input_size": 380,
-        "heatmap_layer": "features",
-    },
-    "resnet50": {
-        "builder": _build_resnet50_linear,
-        "classifier_in": 2048,
-        "input_size": 224,
-        "heatmap_layer": "layer4",
-    },
-    "resnet50_mlp": {
-        "builder": _build_resnet50_mlp,
-        "classifier_in": 2048,
-        "input_size": 224,
-        "heatmap_layer": "layer4",
-    },
-    # RETFound: ViT-Large/16 pre-trained on 1.6M retinal images (Nature 2023)
-    # Fine-tune checkpoint from: https://huggingface.co/YukunZhou/RETFound_mae_natureCFP
-    "retfound": {
-        "builder": _build_retfound_vit,
-        "classifier_in": 1024,
-        "input_size": 224,
-        "heatmap_layer": "vit_blocks",   # special: hooks model.blocks[-1]
-    },
     # EDL EfficientNet-B3: uncertainty-aware model with Evidential Deep Learning head
     "edl_efficientnet_b3": {
         "builder": _build_edl_efficientnet_b3,
@@ -207,8 +131,8 @@ MODEL_PATH = _resolve_default_model_path()
 
 _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _model: nn.Module | None = None   # lazy-loaded singleton
-_model_input_size = _ARCH_CONFIGS["efficientnet_b0"]["input_size"]
-_model_architecture = "efficientnet_b0"
+_model_input_size = _ARCH_CONFIGS["edl_efficientnet_b3"]["input_size"]
+_model_architecture = "edl_efficientnet_b3"
 _preload_lock = threading.Lock()   # prevents duplicate loading from multiple threads
 
 
@@ -260,52 +184,14 @@ def _infer_architecture(state_dict: dict[str, torch.Tensor]) -> str:
     if isinstance(edl_out, torch.Tensor) and edl_out.shape[0] == len(DR_LABELS):
         return "edl_efficientnet_b3"
 
-    # RETFound: ViT-Large/16 patch embedding projects 3-channel 16×16 patches → 1024 dims
-    patch_embed = state_dict.get("patch_embed.proj.weight")
-    if isinstance(patch_embed, torch.Tensor) and tuple(patch_embed.shape) == (1024, 3, 16, 16):
-        return "retfound"
-
-    resnet_mlp_head = state_dict.get("fc.8.weight")
-    if isinstance(resnet_mlp_head, torch.Tensor):
-        return "resnet50_mlp"
-
-    resnet_head = state_dict.get("fc.weight")
-    if isinstance(resnet_head, torch.Tensor) and tuple(resnet_head.shape) == (len(DR_LABELS), 2048):
-        return "resnet50"
-
-    head_weight = state_dict.get("classifier.1.weight")
-    if isinstance(head_weight, torch.Tensor):
-        in_features = int(head_weight.shape[1])
-        for arch_name, config in _ARCH_CONFIGS.items():
-            if config["classifier_in"] == in_features:
-                return arch_name
-
-    stem_weight = state_dict.get("features.0.0.weight")
-    if isinstance(stem_weight, torch.Tensor):
-        stem_channels = int(stem_weight.shape[0])
-        if stem_channels == 32:
-            return "efficientnet_b0"
-        if stem_channels == 48:
-            return "efficientnet_b4"
-
     raise ValueError(
-        "Unsupported checkpoint architecture. Expected a supported EfficientNet, ResNet50, or RETFound state dict."
+        "Unsupported checkpoint architecture. Expected EDL EfficientNet-B3 state dict."
     )
 
 
 def _build_model(architecture: str) -> nn.Module:
     config = _ARCH_CONFIGS[architecture]
-    if architecture in ("retfound", "edl_efficientnet_b3"):
-        return config["builder"]()
-
-    if architecture.startswith("efficientnet"):
-        net = config["builder"](weights=None)
-        in_features = net.classifier[1].in_features
-        net.classifier[1] = nn.Linear(in_features, len(DR_LABELS))
-        return net
-
-    net = config["builder"]()
-    return net
+    return config["builder"]()
 
 
 def load_model() -> nn.Module:
@@ -322,26 +208,13 @@ def load_model() -> nn.Module:
     architecture = _infer_architecture(state_dict)
     net = _build_model(architecture)
 
-    # RETFound fine-tuned checkpoints may include extra MAE pre-training keys
-    # (e.g. mask_token) not present in the fine-tuned timm model; strict=False
-    # is safe here because we already validated the architecture fingerprint above.
-    if architecture == "retfound":
-        missing, unexpected = net.load_state_dict(state_dict, strict=False)
-        critical_missing = [k for k in missing if not k.startswith("head")]
-        if critical_missing:
-            raise RuntimeError(
-                f"RETFound checkpoint is missing expected keys: {critical_missing}"
-            )
-    else:
-        net.load_state_dict(state_dict)
-
+    net.load_state_dict(state_dict)
     net.to(_device)
     net.eval()
 
     # ── Speed: half-precision on GPU (2× faster, 2× less VRAM) ───────────────
     # NOTE: torch.compile() and quantize_dynamic are intentionally NOT applied:
     #   - compile() wraps the model in OptimizedModule, breaking attribute access
-    #     needed by _get_heatmap_target_layer() (model.features, .layer4, .blocks)
     #   - quantize_dynamic removes autograd support, breaking generate_heatmap()
     if _device.type == "cuda":
         net = net.half()
@@ -352,15 +225,7 @@ def load_model() -> nn.Module:
 
 
 def _get_heatmap_target_layer(model: nn.Module, architecture: str | None = None) -> nn.Module:
-    arch = architecture or _model_architecture
-    config = _ARCH_CONFIGS[arch]
-    if config["heatmap_layer"] == "layer4":
-        return model.layer4[-1]
-    if config["heatmap_layer"] == "vit_blocks":
-        return model.blocks[-1]   # last transformer block of ViT
-    if config["heatmap_layer"] == "edl_backbone_features":
-        return model.backbone.features[-1]
-    return model.features[-1]
+    return model.backbone.features[-1]
 
 
 def _laplacian_var(gray: np.ndarray) -> float:
@@ -449,21 +314,15 @@ def predict_image(image_path: str) -> tuple[str, str, int]:
     with torch.inference_mode():
         logits = model(tensor)
 
-    if _model_architecture == "edl_efficientnet_b3":
-        # logits are evidence (softplus output); compute Dirichlet expected probabilities
-        evidence = logits.float()[0]
-        alpha = evidence + 1.0
-        S = alpha.sum()
-        probs = alpha / S
-        class_idx = int(alpha.argmax())
-        confidence = float(probs[class_idx]) * 100.0
-        vacuity = float(len(DR_LABELS) / S) * 100.0
-        conf_text = f"Confidence: {confidence:.1f}%  |  Uncertainty: {vacuity:.1f}%"
-    else:
-        probs = torch.softmax(logits.float(), dim=1)[0]
-        class_idx = int(probs.argmax())
-        confidence = float(probs[class_idx]) * 100.0
-        conf_text = f"Confidence: {confidence:.1f}%"
+    # logits are evidence (softplus output); compute Dirichlet expected probabilities
+    evidence = logits.float()[0]
+    alpha = evidence + 1.0
+    S = alpha.sum()
+    probs = alpha / S
+    class_idx = int(alpha.argmax())
+    confidence = float(probs[class_idx]) * 100.0
+    vacuity = float(len(DR_LABELS) / S) * 100.0
+    conf_text = f"Confidence: {confidence:.1f}%  |  Uncertainty: {vacuity:.1f}%"
 
     return DR_LABELS[class_idx], conf_text, class_idx
 
@@ -502,15 +361,9 @@ def generate_heatmap(image_path: str, class_idx: int) -> str:
         if "A" not in activations or "G" not in gradients:
             raise RuntimeError("Failed to capture activations/gradients for Grad-CAM++.")
 
-        A = activations["A"][0].detach()
-        G = gradients["G"][0].detach()
-
-        # ViT: activations/gradients are sequences [seq_len, embed_dim].
-        # Strip the CLS token (index 0) and fold the patch tokens into a 2-D spatial map.
-        if _model_architecture == "retfound":
-            patch_grid = _model_input_size // 16          # 224//16 = 14
-            A = A[1:].permute(1, 0).reshape(-1, patch_grid, patch_grid)
-            G = G[1:].permute(1, 0).reshape(-1, patch_grid, patch_grid)
+        # Force FP32 for numerically stable CAM math
+        A = activations["A"][0].detach().float()
+        G = gradients["G"][0].detach().float()
 
         G2 = G ** 2
         G3 = G ** 3
@@ -519,19 +372,37 @@ def generate_heatmap(image_path: str, class_idx: int) -> str:
         weights = (alpha * torch.relu(G)).sum(dim=(1, 2))
 
         cam = torch.relu((weights[:, None, None] * A).sum(dim=0))
-        cam_min, cam_max = cam.min(), cam.max()
-        cam = (cam - cam_min) / (cam_max - cam_min + 1e-7)
+        
+        # 1. Percentile clipping to drop extreme hot/cold noise pixels
         cam_np = cam.cpu().numpy()
+        p_min, p_max = np.percentile(cam_np, [5, 99])
+        cam_np = np.clip(cam_np, p_min, p_max)
+        
+        # 2. Min-max normalization
+        cam_min, cam_max = cam_np.min(), cam_np.max()
+        cam_np = (cam_np - cam_min) / (cam_max - cam_min + 1e-7)
+        
+        # 3. Gamma correction to make hotspots punchier
+        cam_np = cam_np ** 0.8
 
-        cam_up = np.array(
-            Image.fromarray((cam_np * 255).astype(np.uint8)).resize(
-                (_model_input_size, _model_input_size), Image.BILINEAR
-            )
-        ).astype(np.float32) / 255.0
+        cam_pil = Image.fromarray((cam_np * 255).astype(np.uint8)).resize(
+            (_model_input_size, _model_input_size), Image.BILINEAR
+        )
+        # 4. Small blur for smoother overlay
+        cam_pil = cam_pil.filter(ImageFilter.GaussianBlur(radius=1.0))
+        
+        cam_up = np.array(cam_pil).astype(np.float32) / 255.0
 
         heatmap_rgb = _apply_jet(cam_up)
         orig_np = np.array(image.resize((_model_input_size, _model_input_size), Image.BILINEAR))
-        overlay = (0.55 * orig_np + 0.45 * heatmap_rgb).clip(0, 255).astype(np.uint8)
+        
+        # 5. Adjusted blend ratio for better readability (less intense heatmap)
+        overlay = (0.70 * orig_np + 0.30 * heatmap_rgb).clip(0, 255).astype(np.uint8)
+
+        # 6. Mask out the empty background to hide corner artifacts
+        gray_orig = orig_np.mean(axis=2)
+        mask = gray_orig > 10
+        overlay[~mask] = orig_np[~mask]
 
         tmp = tempfile.NamedTemporaryFile(
             suffix=".png", delete=False, prefix="eyeshield_cam_"
@@ -588,10 +459,7 @@ def _load_model_from_path(model_path: str) -> tuple[nn.Module, str, int]:
     state_dict = _unwrap_state_dict(_torch_load(model_path))
     architecture = _infer_architecture(state_dict)
     net = _build_model(architecture)
-    if architecture == "retfound":
-        net.load_state_dict(state_dict, strict=False)
-    else:
-        net.load_state_dict(state_dict)
+    net.load_state_dict(state_dict)
     net.to(_device).eval()
     if _device.type == "cuda":
         net = net.half()
@@ -635,20 +503,14 @@ def run_comparison_inference(image_path: str, model_path: str) -> tuple[str, str
     with torch.inference_mode():
         logits = model(tensor)
 
-    if arch == "edl_efficientnet_b3":
-        evidence = logits.float()[0]
-        alpha = evidence + 1.0
-        S = alpha.sum()
-        probs = alpha / S
-        class_idx = int(alpha.argmax())
-        confidence = float(probs[class_idx]) * 100.0
-        vacuity = float(len(DR_LABELS) / S) * 100.0
-        conf_text = f"Confidence: {confidence:.1f}%  |  Uncertainty: {vacuity:.1f}%"
-    else:
-        probs = torch.softmax(logits.float(), dim=1)[0]
-        class_idx = int(probs.argmax())
-        confidence = float(probs[class_idx]) * 100.0
-        conf_text = f"Confidence: {confidence:.1f}%"
+    evidence = logits.float()[0]
+    alpha = evidence + 1.0
+    S = alpha.sum()
+    probs = alpha / S
+    class_idx = int(alpha.argmax())
+    confidence = float(probs[class_idx]) * 100.0
+    vacuity = float(len(DR_LABELS) / S) * 100.0
+    conf_text = f"Confidence: {confidence:.1f}%  |  Uncertainty: {vacuity:.1f}%"
 
     # Grad-CAM++ heatmap
     heatmap_path = ""
@@ -676,27 +538,45 @@ def run_comparison_inference(image_path: str, model_path: str) -> tuple[str, str
         if "A" not in activations or "G" not in gradients:
             raise RuntimeError("Failed to capture activations/gradients for Grad-CAM++.")
 
-        A = activations["A"][0].detach()
-        G = gradients["G"][0].detach()
-
-        if arch == "retfound":
-            pg = input_size // 16
-            A = A[1:].permute(1, 0).reshape(-1, pg, pg)
-            G = G[1:].permute(1, 0).reshape(-1, pg, pg)
+        A = activations["A"][0].detach().float()
+        G = gradients["G"][0].detach().float()
 
         G2, G3 = G ** 2, G ** 3
         alpha_cam = G2 / (2 * G2 + A.sum(dim=(1, 2), keepdim=True) * G3 + 1e-7)
         weights = (alpha_cam * torch.relu(G)).sum(dim=(1, 2))
         cam = torch.relu((weights[:, None, None] * A).sum(dim=0))
-        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-7)
+        
+        # 1. Percentile clipping
         cam_np = cam.cpu().numpy()
+        p_min, p_max = np.percentile(cam_np, [5, 99])
+        cam_np = np.clip(cam_np, p_min, p_max)
+        
+        # 2. Min-max normalization
+        cam_min, cam_max = cam_np.min(), cam_np.max()
+        cam_np = (cam_np - cam_min) / (cam_max - cam_min + 1e-7)
+        
+        # 3. Gamma correction 
+        cam_np = cam_np ** 0.8
 
-        cam_up = np.array(
-            Image.fromarray((cam_np * 255).astype(np.uint8)).resize((input_size, input_size), Image.BILINEAR)
-        ).astype(np.float32) / 255.0
+        cam_pil = Image.fromarray((cam_np * 255).astype(np.uint8)).resize(
+            (input_size, input_size), Image.BILINEAR
+        )
+        # 4. Small blur
+        cam_pil = cam_pil.filter(ImageFilter.GaussianBlur(radius=1.0))
+        
+        cam_up = np.array(cam_pil).astype(np.float32) / 255.0
+        
         heatmap_rgb = _apply_jet(cam_up)
         orig_np = np.array(image.resize((input_size, input_size), Image.BILINEAR))
-        overlay = (0.55 * orig_np + 0.45 * heatmap_rgb).clip(0, 255).astype(np.uint8)
+        
+        # 5. Adjusted blend ratio
+        overlay = (0.70 * orig_np + 0.30 * heatmap_rgb).clip(0, 255).astype(np.uint8)
+
+        # 6. Mask out the empty background to hide corner artifacts
+        gray_orig = orig_np.mean(axis=2)
+        mask = gray_orig > 10
+        overlay[~mask] = orig_np[~mask]
+
         tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, prefix="eyeshield_cmp_")
         Image.fromarray(overlay).save(tmp.name)
         tmp.close()
