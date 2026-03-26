@@ -15,9 +15,10 @@ class UserStore:
                 "display_name": display_name or full_name or username,
                 "contact": contact or "",
                 "specialization": specialization or "",
+                "availability_json": availability_json or "",
                 "role": role,
             }
-            for username, full_name, display_name, contact, specialization, role in users
+            for username, full_name, display_name, contact, specialization, availability_json, role in users
         ]
 
     @classmethod
@@ -41,6 +42,7 @@ class UserStore:
         display_name,
         contact,
         specialization,
+        availability_json="",
         acting_username=None,
         acting_role=None,
         acting_password=None,
@@ -54,6 +56,7 @@ class UserStore:
             display_name=display_name,
             contact=contact,
             specialization=specialization,
+            availability_json=availability_json,
             acting_username=acting_username,
             acting_role=acting_role,
             acting_password=acting_password,
@@ -111,6 +114,32 @@ class UserStore:
             acting_role=acting_role,
         )
 
+    @classmethod
+    def update_user_availability(cls, username, availability_json, acting_username=None, acting_role=None):
+        acting_username, acting_role = cls._resolve_actor(acting_username, acting_role)
+        return AuthUserManager.update_user_availability(
+            username,
+            availability_json,
+            acting_username=acting_username,
+            acting_role=acting_role,
+        )
+
+    @classmethod
+    def log_activity(cls, username, action, action_time=None):
+        return AuthUserManager.add_activity_log(username, action, action_time)
+
+    @classmethod
+    def get_recent_activity(cls, limit=120):
+        rows = AuthUserManager.get_recent_activity(limit)
+        return [
+            {
+                "username": username,
+                "action": action,
+                "time": action_time,
+            }
+            for username, action, action_time in rows
+        ]
+
 # For backward compatibility with existing code
 load_users = UserStore.load_users
 save_users = UserStore.save_users
@@ -119,3 +148,6 @@ delete_user = UserStore.delete_user
 get_all_users = UserStore.get_all_users
 reset_password = UserStore.reset_password
 update_user_role = UserStore.update_user_role
+update_user_availability = UserStore.update_user_availability
+log_activity = UserStore.log_activity
+get_recent_activity = UserStore.get_recent_activity

@@ -447,6 +447,13 @@ class LoginWindow(QWidget):
             os.environ["EYESHIELD_CURRENT_SPECIALIZATION"] = specialization
             os.environ["EYESHIELD_CURRENT_TITLE"] = display_title
             os.environ["EYESHIELD_CURRENT_CONTACT"] = contact
+
+            try:
+                import user_store
+                user_store.log_activity(username, "Login")
+            except Exception:
+                pass
+
             self.main = EyeShieldApp(
                 username,
                 role,

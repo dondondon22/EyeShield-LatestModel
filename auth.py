@@ -11,6 +11,7 @@ import os
 import json
 import re
 import secrets
+from datetime import datetime
 from typing import Optional
 
 DB_FILE = "users.db"
@@ -124,6 +125,7 @@ class UserManager:
         "display_name": "TEXT",
         "contact": "TEXT",
         "specialization": "TEXT",
+        "availability_json": "TEXT",
     }
 
     _PATIENT_RECORD_COLUMNS = {
@@ -194,11 +196,24 @@ class UserManager:
             )
         """)
 
+        # Activity log table
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activity_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                action_time TEXT NOT NULL
+            )
+            """
+        )
+
         UserManager._ensure_patient_record_columns(conn)
 
         conn.commit()
 
-        UserManager._migrate_users_json(conn)
+        if first_run:
+            UserManager._migrate_users_json(conn)
         UserManager._ensure_admin_user(conn, first_run)
 
         return conn
@@ -218,6 +233,7 @@ class UserManager:
         cur.execute("UPDATE users SET full_name = username WHERE full_name IS NULL OR TRIM(full_name) = ''")
         cur.execute("UPDATE users SET display_name = full_name WHERE display_name IS NULL OR TRIM(display_name) = ''")
         cur.execute("UPDATE users SET contact = '' WHERE contact IS NULL")
+        cur.execute("UPDATE users SET availability_json = '' WHERE availability_json IS NULL")
         cur.execute(
             """
             UPDATE users
@@ -264,6 +280,13 @@ class UserManager:
             full_name = str(user.get("full_name") or user.get("name") or username).strip()
             display_name = str(user.get("display_name") or full_name or username).strip()
             contact = str(user.get("contact") or "").strip()
+            raw_availability = user.get("availability_json")
+            if raw_availability is None:
+                raw_availability = user.get("availability")
+            if isinstance(raw_availability, (dict, list)):
+                availability_json = json.dumps(raw_availability, ensure_ascii=True)
+            else:
+                availability_json = str(raw_availability or "").strip()
             raw_password = str(user.get("password", ""))
             role = str(user.get("role", "clinician") or "clinician")
             specialization = UserManager._normalize_specialization(
@@ -290,9 +313,10 @@ class UserManager:
                     display_name,
                     contact,
                     specialization,
+                    availability_json,
                     password_hash,
                     role
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     username,
@@ -300,6 +324,7 @@ class UserManager:
                     display_name or full_name or username,
                     contact,
                     specialization,
+                    availability_json,
                     password_hash,
                     role,
                 ),
@@ -330,11 +355,12 @@ class UserManager:
                 display_name,
                 contact,
                 specialization,
+                availability_json,
                 password_hash,
                 role
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (username, "Administrator", "Administrator", "", "", password_hash, "admin"),
+            (username, "Administrator", "Administrator", "", "", "", password_hash, "admin"),
         )
         conn.commit()
 
@@ -432,6 +458,7 @@ class UserManager:
         display_name: Optional[str] = None,
         contact: Optional[str] = None,
         specialization: Optional[str] = None,
+        availability_json: Optional[str] = None,
         acting_username: Optional[str] = None,
         acting_role: Optional[str] = None,
         acting_password: Optional[str] = None,
@@ -441,6 +468,7 @@ class UserManager:
         full_name_value = str(full_name or "").strip()
         display_name_value = str(display_name or full_name or "").strip()
         contact_value = str(contact or "").strip()
+        availability_json_value = str(availability_json or "").strip()
         normalized_role = UserManager._normalize_role(role)
         normalized_specialization = UserManager._normalize_specialization(
             specialization,
@@ -480,9 +508,10 @@ class UserManager:
                     display_name,
                     contact,
                     specialization,
+                    availability_json,
                     password_hash,
                     role
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     username,
@@ -490,6 +519,7 @@ class UserManager:
                     display_name_value,
                     contact_value,
                     normalized_specialization or "",
+                    availability_json_value,
                     pw_hash,
                     normalized_role,
                 )
@@ -547,7 +577,7 @@ class UserManager:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT username, full_name, display_name, contact, specialization, role
+            SELECT username, full_name, display_name, contact, specialization, availability_json, role
             FROM users
             WHERE username = ?
             """,
@@ -563,7 +593,8 @@ class UserManager:
             "display_name": row[2] or row[1] or row[0],
             "contact": row[3] or "",
             "specialization": row[4] or "",
-            "role": row[5],
+            "availability_json": row[5] or "",
+            "role": row[6],
         }
     
     @staticmethod
@@ -572,7 +603,7 @@ class UserManager:
         conn = get_connection()
         cur = conn.cursor()
         
-        cur.execute("SELECT username, full_name, display_name, contact, specialization, role FROM users")
+        cur.execute("SELECT username, full_name, display_name, contact, specialization, availability_json, role FROM users")
         users = cur.fetchall()
         
         conn.close()
@@ -699,5 +730,70 @@ class UserManager:
 
         conn.close()
         return success
+
+    @staticmethod
+    def update_user_availability(
+        username: str,
+        availability_json: str,
+        acting_username: Optional[str] = None,
+        acting_role: Optional[str] = None,
+    ) -> bool:
+        username = username.strip()
+        if not username or not UserManager._can_manage_users(acting_role):
+            return False
+
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE users SET availability_json = ? WHERE username = ?",
+                (str(availability_json or ""), username),
+            )
+            conn.commit()
+            success = cur.rowcount > 0
+        except sqlite3.Error:
+            success = False
+        conn.close()
+        return success
+
+    @staticmethod
+    def add_activity_log(username: str, action: str, action_time: Optional[str] = None) -> bool:
+        username = str(username or "").strip()
+        action = str(action or "").strip()
+        if not username or not action:
+            return False
+
+        timestamp = str(action_time or "").strip() or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO activity_logs (username, action, action_time) VALUES (?, ?, ?)",
+                (username, action, timestamp),
+            )
+            conn.commit()
+            success = True
+        except sqlite3.Error:
+            success = False
+        conn.close()
+        return success
+
+    @staticmethod
+    def get_recent_activity(limit: int = 120) -> list[tuple]:
+        safe_limit = max(1, min(int(limit), 500))
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT username, action, action_time
+            FROM activity_logs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        )
+        rows = cur.fetchall()
+        conn.close()
+        return rows
 
 

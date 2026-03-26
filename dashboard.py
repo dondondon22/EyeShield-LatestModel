@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QGroupBox, QMessageBox, QProgressBar, QSizePolicy
 )
 from PySide6.QtCore import Qt, QSize, QByteArray
-from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont, QShortcut, QKeySequence
+from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont, QShortcut, QKeySequence, QColor
 from PySide6.QtSvg import QSvgRenderer
 
 from screening import ScreeningPage
@@ -324,6 +324,8 @@ class EyeShieldApp(QMainWindow):
 
         # Ensure nav bar styles are correct for the initial theme
         self._apply_nav_theme(False)
+        # Re-apply active state after theme bootstrap so startup icons/buttons are visible.
+        self._set_active_nav(self.pages.currentIndex())
 
         # Apply saved theme from settings (must run after all pages are parented)
         saved_theme = self.settings_page.theme_combo.currentText()
@@ -400,14 +402,78 @@ class EyeShieldApp(QMainWindow):
         if not svg_path:
             button.setIcon(QIcon())
             return
+        is_users_icon = os.path.basename(str(svg_path or "")).lower() == "users.svg"
         pixmap = self._load_svg_pixmap_colored(svg_path, color, 256)
+        if is_users_icon and not self._pixmap_has_visible_pixels(pixmap):
+            pixmap = QPixmap()
         if pixmap.isNull():
-            # Fallback to native SVG icon loading if recoloring fails.
-            button.setIcon(QIcon(svg_path))
-            button.setIconSize(size)
-            return
+            # Fallback: rasterize first, then tint non-transparent pixels so icons remain visible.
+            base_pixmap = self._load_svg_pixmap(svg_path, 256)
+            if not base_pixmap.isNull():
+                pixmap = self._tint_pixmap(base_pixmap, color)
+                if is_users_icon and not self._pixmap_has_visible_pixels(pixmap):
+                    pixmap = QPixmap()
+            if pixmap.isNull() and is_users_icon:
+                pixmap = self._build_users_fallback_pixmap(color, 256)
+            if pixmap.isNull():
+                # Last-resort fallback to native loading.
+                button.setIcon(QIcon(svg_path))
+                button.setIconSize(size)
+                return
         button.setIcon(QIcon(pixmap))
         button.setIconSize(size)
+
+    @staticmethod
+    def _pixmap_has_visible_pixels(pixmap: QPixmap, min_alpha: int = 24, min_coverage: float = 0.008) -> bool:
+        if pixmap.isNull():
+            return False
+        image = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+        width = image.width()
+        height = image.height()
+        if width <= 0 or height <= 0:
+            return False
+        visible = 0
+        total = width * height
+        for y in range(height):
+            for x in range(width):
+                if image.pixelColor(x, y).alpha() >= min_alpha:
+                    visible += 1
+        return (visible / float(total)) >= float(min_coverage)
+
+    @staticmethod
+    def _build_users_fallback_pixmap(color: str, size: int = 64) -> QPixmap:
+        """Draw a simple users glyph as a hard fallback when SVG rendering is unreliable."""
+        image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+        image.fill(Qt.transparent)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(color))
+
+        # Main avatar
+        painter.drawEllipse(int(size * 0.34), int(size * 0.17), int(size * 0.32), int(size * 0.32))
+        painter.drawRoundedRect(int(size * 0.20), int(size * 0.52), int(size * 0.60), int(size * 0.28), 12, 12)
+
+        # Secondary avatar
+        painter.drawEllipse(int(size * 0.10), int(size * 0.27), int(size * 0.22), int(size * 0.22))
+        painter.drawRoundedRect(int(size * 0.06), int(size * 0.58), int(size * 0.28), int(size * 0.19), 8, 8)
+
+        painter.end()
+        return QPixmap.fromImage(image)
+
+    @staticmethod
+    def _tint_pixmap(source: QPixmap, color: str) -> QPixmap:
+        """Tint a source pixmap using SourceIn composition to preserve alpha shape."""
+        if source.isNull():
+            return QPixmap()
+        tinted = QPixmap(source.size())
+        tinted.fill(Qt.transparent)
+        painter = QPainter(tinted)
+        painter.drawPixmap(0, 0, source)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), color)
+        painter.end()
+        return tinted
 
     def _refresh_nav_button_icons(self, active_index: int):
         """Recolor navigation SVG icons to match active/inactive and theme state."""
@@ -875,6 +941,12 @@ class EyeShieldApp(QMainWindow):
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
+
+        try:
+            import user_store
+            user_store.log_activity(self.username, "Logout")
+        except Exception:
+            pass
 
         from login import LoginWindow
         self._logging_out = True
