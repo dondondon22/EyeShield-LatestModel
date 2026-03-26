@@ -5,15 +5,17 @@ Provides a GUI for creating, listing, updating and deleting users.
 
 import os
 import re
+import json
+from datetime import date, datetime, timedelta
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
     QHBoxLayout, QPushButton, QLineEdit, QComboBox, QMessageBox,
     QGroupBox, QFormLayout, QAbstractItemView, QDialog, QApplication,
-    QHeaderView, QGridLayout, QInputDialog
+    QHeaderView, QInputDialog, QMenu, QCheckBox, QTimeEdit, QTabWidget
 )
 from PySide6.QtGui import QFont, QAction, QIcon, QColor
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTime
 import user_store
 
 
@@ -30,12 +32,41 @@ _ROLE_COLORS_DARK = {
     "viewer":    ("#bac2de", "#2f3348"),
 }
 
+_SPECIALIZATION_OPTIONS = ["Optometrist", "Ophthalmologist"]
+_WEEKDAY_OPTIONS = [
+    ("mon", "Monday"),
+    ("tue", "Tuesday"),
+    ("wed", "Wednesday"),
+    ("thu", "Thursday"),
+    ("fri", "Friday"),
+    ("sat", "Saturday"),
+    ("sun", "Sunday"),
+]
+_WEEKDAY_LABELS = {key: label for key, label in _WEEKDAY_OPTIONS}
+
 # â”€â”€ Shared dialog stylesheet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _DIALOG_STYLE = """
     QDialog { background: #ffffff; }
-    QLabel  { font-size: 13px; color: #212529; }
+    QLabel  { font-size: 13px; color: #212529; background: transparent; border: none; }
     QLabel#dlgTitle { font-size: 16px; font-weight: 700; color: #212529; margin-bottom: 2px; }
     QLabel#dlgHint  { font-size: 11px; color: #6c757d; }
+    QCheckBox {
+        font-size: 13px;
+        color: #212529;
+        spacing: 8px;
+        padding: 3px 0;
+    }
+    QCheckBox::indicator {
+        width: 16px;
+        height: 16px;
+        border: 1px solid #adb5bd;
+        border-radius: 4px;
+        background: #ffffff;
+    }
+    QCheckBox::indicator:checked {
+        border-color: #0d6efd;
+        background: #0d6efd;
+    }
     QLineEdit, QComboBox {
         background: #f8f9fa;
         border: 1px solid #ced4da;
@@ -78,6 +109,42 @@ _PAGE_STYLE = """
         padding: 0 6px;
         color: #495057;
     }
+    QTabWidget#usrAdminTabs::pane {
+        border: 1px solid #dce5ef;
+        border-radius: 12px;
+        background: #ffffff;
+        top: -1px;
+    }
+    QTabWidget#usrAdminTabs QTabBar::tab {
+        background: #eef3f9;
+        color: #4a5563;
+        border: 1px solid #d4deea;
+        border-bottom: none;
+        border-top-left-radius: 10px;
+        border-top-right-radius: 10px;
+        padding: 6px 14px;
+        min-width: 110px;
+        font-size: 12px;
+        font-weight: 700;
+        margin-right: 6px;
+    }
+    QTabWidget#usrAdminTabs QTabBar::tab:selected {
+        background: #ffffff;
+        color: #0d6efd;
+        border-color: #c7d8ef;
+    }
+    QLabel#usrSectionTitle {
+        color: #1f2a37;
+        font-size: 14px;
+        font-weight: 700;
+        background: transparent;
+    }
+    QLabel#usrSectionHint {
+        color: #738295;
+        font-size: 11px;
+        font-weight: 500;
+        background: transparent;
+    }
     QLineEdit, QComboBox {
         background: #ffffff;
         border: 1px solid #ced4da;
@@ -88,20 +155,25 @@ _PAGE_STYLE = """
     QLineEdit:focus, QComboBox:focus { border: 1.5px solid #0d6efd; }
     QTableWidget {
         background: #ffffff;
-        gridline-color: #f0f0f0;
-        border: none;
+        gridline-color: #ecf0f4;
+        border: 1px solid #e3e8ef;
+        border-radius: 10px;
         font-size: 13px;
+        alternate-background-color: #f8fbff;
+        selection-background-color: #e6f0ff;
+        selection-color: #0a58ca;
     }
-    QTableWidget::item { padding: 10px 8px; }
+    QTableWidget#usrUsersTable::item { padding: 12px 10px; border-bottom: 1px solid #eef2f7; }
+    QTableWidget#usrActivityTable::item { padding: 10px 8px; border-bottom: 1px solid #f1f3f6; }
     QTableWidget::item:selected { background: #e7f1ff; color: #0a58ca; }
     QHeaderView::section {
-        background: #f8f9fa;
-        padding: 10px 8px;
+        background: #f6f9fc;
+        padding: 11px 10px;
         border: none;
-        border-bottom: 2px solid #dee2e6;
+        border-bottom: 1px solid #d7dfe8;
         font-weight: 700;
         font-size: 11px;
-        color: #6c757d;
+        color: #5f6b7a;
         letter-spacing: 0.4px;
         text-transform: uppercase;
     }
@@ -118,6 +190,72 @@ _PAGE_STYLE = """
     QPushButton#warningBtn:hover { background: #dc6a0a; }
     QPushButton#neutralBtn   { background: #e9ecef; color: #495057; border: 1px solid #ced4da; }
     QPushButton#neutralBtn:hover { background: #dee2e6; }
+    QLineEdit#usrSearchInput {
+        background: #ffffff;
+        border: 1px solid #cfe0f2;
+        border-radius: 12px;
+        padding: 8px 12px;
+        font-size: 13px;
+        color: #1f2937;
+        min-height: 34px;
+    }
+    QLineEdit#usrSearchInput:focus {
+        border: 1.5px solid #0d6efd;
+        background: #f8fbff;
+    }
+    QLabel#usrStatTotal,
+    QLabel#usrStatAdmin,
+    QLabel#usrStatSpecialists,
+    QLabel#usrStatViewer {
+        border-radius: 12px;
+        padding: 7px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        border: 1px solid transparent;
+    }
+    QLabel#usrStatTotal {
+        color: #0b5ed7;
+        background: #eaf2ff;
+        border-color: #cfe0ff;
+    }
+    QLabel#usrStatAdmin {
+        color: #842029;
+        background: #fdecef;
+        border-color: #f5c2c7;
+    }
+    QLabel#usrStatSpecialists {
+        color: #0f5132;
+        background: #e8f7ef;
+        border-color: #b7e4c7;
+    }
+    QLabel#usrStatViewer {
+        color: #495057;
+        background: #f1f3f5;
+        border-color: #dee2e6;
+    }
+    QWidget#usrNotifyBar {
+        background: #e8f5ee;
+        border: 1px solid #b7e4c7;
+        border-radius: 10px;
+    }
+    QLabel#usrNotifyText {
+        color: #0f5132;
+        font-size: 12px;
+        font-weight: 600;
+        background: transparent;
+    }
+    QPushButton#usrNotifyClose {
+        background: transparent;
+        color: #0f5132;
+        border: none;
+        font-size: 14px;
+        font-weight: 700;
+        padding: 0 4px;
+        min-width: 18px;
+    }
+    QPushButton#usrNotifyClose:hover {
+        color: #0a3622;
+    }
 """
 
 
@@ -173,8 +311,32 @@ class UserManager:
     """Thin UI-layer wrapper around user_store."""
 
     @staticmethod
-    def create_user(username, password, role, acting_username=None, acting_role=None, acting_password=None):
-        return user_store.add_user(username, password, role, acting_username, acting_role, acting_password)
+    def create_user(
+        username,
+        password,
+        role,
+        full_name,
+        display_name,
+        contact,
+        specialization,
+        availability_json="",
+        acting_username=None,
+        acting_role=None,
+        acting_password=None,
+    ):
+        return user_store.add_user(
+            username,
+            password,
+            role,
+            full_name,
+            display_name,
+            contact,
+            specialization,
+            availability_json,
+            acting_username,
+            acting_role,
+            acting_password,
+        )
 
     @staticmethod
     def get_all_users():
@@ -216,9 +378,23 @@ class NewUserDialog(QDialog):
         form = QFormLayout()
         form.setSpacing(10)
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        label_style = "color:#344054;font-size:12px;font-weight:600;background:transparent;border:none;"
+
+        def _lbl(text):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(label_style)
+            return lbl
 
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("3â€“32 chars: letters, digits, _ . -")
+        self.full_name_input = QLineEdit()
+        self.full_name_input.setPlaceholderText("Legal or full professional name")
+        self.display_name_input = QLineEdit()
+        self.display_name_input.setPlaceholderText("Display name shown across the app and reports")
+        self.dr_prefix_checkbox = QCheckBox("Include honorific title (Dr.)")
+        self.dr_prefix_checkbox.setStyleSheet("color:#495057;font-size:12px;font-weight:600;padding:2px 0;")
+        self.contact_input = QLineEdit()
+        self.contact_input.setPlaceholderText("Phone or email")
         self.password_input = QLineEdit()
         self.password_input.setPlaceholderText("Min 12 chars")
         self.password_input.setEchoMode(QLineEdit.Password)
@@ -229,12 +405,21 @@ class NewUserDialog(QDialog):
         _add_eye_toggle(self.confirm_password_input)
         self.role_input = QComboBox()
         self.role_input.addItems(_assignable_roles())
-
-        form.addRow("Username:", self.username_input)
-        form.addRow("Password:", self.password_input)
-        form.addRow("Confirm:", self.confirm_password_input)
-        form.addRow("Role:", self.role_input)
+        self.specialization_input = QComboBox()
+        self.specialization_input.addItems(_SPECIALIZATION_OPTIONS)
+        self.role_input.currentTextChanged.connect(self._on_role_changed)
+        
+        form.addRow(_lbl("Full Name:"), self.full_name_input)
+        form.addRow(_lbl("Display Name:"), self.display_name_input)
+        form.addRow("", self.dr_prefix_checkbox)
+        form.addRow(_lbl("Contact:"), self.contact_input)
+        form.addRow(_lbl("Username:"), self.username_input)
+        form.addRow(_lbl("Password:"), self.password_input)
+        form.addRow(_lbl("Confirm:"), self.confirm_password_input)
+        form.addRow(_lbl("Role:"), self.role_input)
+        form.addRow(_lbl("Specialization:"), self.specialization_input)
         layout.addLayout(form)
+        self._on_role_changed(self.role_input.currentText())
 
         hint = QLabel("Password must be 12+ chars with uppercase, lowercase, number & symbol.")
         hint.setObjectName("dlgHint")
@@ -244,7 +429,7 @@ class NewUserDialog(QDialog):
         btn_row.addStretch()
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setObjectName("cancelBtn")
-        create_btn = QPushButton("Create Account")
+        create_btn = QPushButton("Proceed")
         create_btn.setObjectName("okBtn")
         create_btn.setDefault(True)
         create_btn.clicked.connect(self._create_user)
@@ -254,14 +439,30 @@ class NewUserDialog(QDialog):
         btn_row.addWidget(create_btn)
         layout.addLayout(btn_row)
 
+    def _on_role_changed(self, role_value):
+        is_clinician = str(role_value or "").strip().lower() == "clinician"
+        self.specialization_input.setEnabled(is_clinician)
+
     def _create_user(self):
         username = self.username_input.text().strip()
+        full_name = self.full_name_input.text().strip()
+        display_name = self.display_name_input.text().strip()
+        add_dr_prefix = self.dr_prefix_checkbox.isChecked()
+        contact = self.contact_input.text().strip()
         password = self.password_input.text()
         role = self.role_input.currentText()
+        specialization = self.specialization_input.currentText().strip()
+
+        if add_dr_prefix and display_name and not display_name.lower().startswith("dr."):
+            display_name = f"Dr. {display_name}"
 
         # ── Field presence ────────────────────────────────────────────
-        if not username or not password:
-            QMessageBox.warning(self, "Missing Fields", "Username and password are required.")
+        if not username or not full_name or not display_name or not password:
+            QMessageBox.warning(self, "Missing Fields", "Full name, display name, username, and password are required.")
+            return
+
+        if role == "clinician" and not specialization:
+            QMessageBox.warning(self, "Missing Specialization", "Select a specialization for clinician accounts.")
             return
 
         # ── Username format (mirrors auth.py USERNAME_PATTERN) ────────
@@ -270,6 +471,14 @@ class NewUserDialog(QDialog):
                 self, "Invalid Username",
                 "Username must be 3–32 characters and may only contain\n"
                 "letters, digits, underscores (_), dots (.) and hyphens (-).",
+            )
+            return
+
+        if username.lower() == password.lower():
+            QMessageBox.warning(
+                self,
+                "Invalid Credentials",
+                "Username and password cannot be the same.",
             )
             return
 
@@ -316,6 +525,16 @@ class NewUserDialog(QDialog):
             return
 
         # ── Admin password confirmation ───────────────────────────────
+        proceed = QMessageBox.question(
+            self,
+            "Confirm Account Creation",
+            f"Create account for <b>{display_name}</b> with role <b>{role}</b>?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if proceed != QMessageBox.Yes:
+            return
+
         acting_password = UsersPage.prompt_for_admin_password(self, "create this account")
         if acting_password is None:
             return
@@ -327,9 +546,19 @@ class NewUserDialog(QDialog):
             )
             return
 
+        availability_dialog = AvailabilityDialog(self)
+        if availability_dialog.exec() != QDialog.Accepted:
+            return
+        availability_json = "" if availability_dialog.skip_selected else availability_dialog.get_availability_json()
+
         # ── Create ────────────────────────────────────────────────────
         success = UserManager.create_user(
             username, password, role,
+            full_name,
+            display_name,
+            contact,
+            specialization,
+            availability_json=availability_json,
             acting_username=acting_username,
             acting_role=acting_role,
             acting_password=acting_password,
@@ -341,10 +570,8 @@ class NewUserDialog(QDialog):
                 parent.log_activity(username, f"Created as {role}")
             if hasattr(parent, "_set_status"):
                 parent._set_status(f"User '{username}' created successfully")
-            QMessageBox.information(
-                self, "Account Created",
-                f"User account '{username}' ({role}) was created successfully.",
-            )
+            if hasattr(parent, "show_notification"):
+                parent.show_notification(f"Account created: {display_name} ({role}).")
             self.accept()
         else:
             QMessageBox.warning(
@@ -352,6 +579,139 @@ class NewUserDialog(QDialog):
                 "An unexpected error occurred while saving the account.\n"
                 "Please check the application logs for details.",
             )
+
+
+class AvailabilityDialog(QDialog):
+    """Step 2 dialog for setting recurring weekly availability."""
+
+    def __init__(self, parent=None, initial_availability=None):
+        super().__init__(parent)
+        self.setWindowTitle("Weekly Availability")
+        self.setModal(True)
+        self.setMinimumWidth(420)
+        self.setStyleSheet(_DIALOG_STYLE)
+        self.skip_selected = False
+        self._day_checks = []
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        title = QLabel("Set Weekly Availability")
+        title.setObjectName("dlgTitle")
+        layout.addWidget(title)
+
+        subtitle = QLabel("Select available weekdays and time range. This repeats weekly until changed.")
+        subtitle.setObjectName("dlgHint")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        time_row = QHBoxLayout()
+        time_row.setSpacing(4)
+        self.start_time = QTimeEdit()
+        self.start_time.setDisplayFormat("hh:mm AP")
+        self.start_time.setFixedWidth(110)
+        self.start_time.setTime(QTime(9, 0))
+        self.end_time = QTimeEdit()
+        self.end_time.setDisplayFormat("hh:mm AP")
+        self.end_time.setFixedWidth(110)
+        self.end_time.setTime(QTime(17, 0))
+        time_row.addWidget(QLabel("From"))
+        time_row.addWidget(self.start_time)
+        time_row.addWidget(QLabel("To"))
+        time_row.addWidget(self.end_time)
+        time_row.addStretch()
+        layout.addLayout(time_row)
+
+        for idx, (day_key, day_label) in enumerate(_WEEKDAY_OPTIONS):
+            checkbox = QCheckBox(day_label)
+            checkbox.setChecked(idx < 5)
+            self._day_checks.append((day_key, checkbox))
+            layout.addWidget(checkbox)
+
+        if isinstance(initial_availability, dict):
+            start_time = str(initial_availability.get("start_time") or "").strip()
+            end_time = str(initial_availability.get("end_time") or "").strip()
+            selected_days = initial_availability.get("days") or []
+
+            # Backward compatibility for older date-based availability payloads.
+            if not selected_days:
+                legacy_dates = initial_availability.get("dates") or []
+                if isinstance(legacy_dates, list):
+                    resolved_days = []
+                    for date_value in legacy_dates:
+                        try:
+                            parsed_day = datetime.strptime(str(date_value), "%Y-%m-%d").date().strftime("%a").lower()
+                            resolved_days.append(parsed_day)
+                        except Exception:
+                            pass
+                    selected_days = resolved_days
+
+            if start_time:
+                parsed = self._parse_time_value(start_time)
+                if parsed.isValid():
+                    self.start_time.setTime(parsed)
+            if end_time:
+                parsed = self._parse_time_value(end_time)
+                if parsed.isValid():
+                    self.end_time.setTime(parsed)
+
+            if isinstance(selected_days, list):
+                selected_set = {str(value).strip().lower() for value in selected_days}
+                for day_key, checkbox in self._day_checks:
+                    checkbox.setChecked(day_key in selected_set)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        back_btn = QPushButton("Back")
+        back_btn.setObjectName("cancelBtn")
+        skip_btn = QPushButton("Skip For Now")
+        skip_btn.setObjectName("neutralBtn")
+        save_btn = QPushButton("Save Account")
+        save_btn.setObjectName("okBtn")
+        back_btn.clicked.connect(self.reject)
+        skip_btn.clicked.connect(self._skip)
+        save_btn.clicked.connect(self._save)
+        btn_row.addWidget(back_btn)
+        btn_row.addWidget(skip_btn)
+        btn_row.addWidget(save_btn)
+        layout.addLayout(btn_row)
+
+    def _skip(self):
+        self.skip_selected = True
+        self.accept()
+
+    def _save(self):
+        selected_days = [day for day, cb in self._day_checks if cb.isChecked()]
+        if not selected_days:
+            QMessageBox.warning(self, "Availability", "Select at least one weekday or choose Skip For Now.")
+            return
+        if self.end_time.time() <= self.start_time.time():
+            QMessageBox.warning(self, "Availability", "End time must be later than start time.")
+            return
+        self.skip_selected = False
+        self.accept()
+
+    def get_availability_json(self) -> str:
+        payload = {
+            "mode": "weekly-template",
+            "start_time": self.start_time.time().toString("hh:mm AP"),
+            "end_time": self.end_time.time().toString("hh:mm AP"),
+            "days": [day for day, cb in self._day_checks if cb.isChecked()],
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        return json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+
+    @staticmethod
+    def _parse_time_value(value: str) -> QTime:
+        text = str(value or "").strip()
+        if not text:
+            return QTime()
+        for fmt in ("hh:mm AP", "h:mm AP", "hh:mm ap", "h:mm ap", "HH:mm"):
+            parsed = QTime.fromString(text, fmt)
+            if parsed.isValid():
+                return parsed
+        return QTime()
 
 
 class ChangeRoleDialog(QDialog):
@@ -474,8 +834,8 @@ class UsersPage(QWidget):
         self.setStyleSheet(_PAGE_STYLE)
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(14, 12, 14, 12)
+        main_layout.setSpacing(10)
 
         # â”€â”€ Header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         header_row = QHBoxLayout()
@@ -484,45 +844,103 @@ class UsersPage(QWidget):
             "font-size:22px;font-weight:700;color:#0d6efd;"
             "font-family:'Segoe UI','Inter','Arial';"
         )
-        self.count_label = QLabel("0 users")
-        self.count_label.setStyleSheet("color:#6c757d;font-size:13px;margin-left:10px;")
+        self.count_label = QLabel("User Directory")
+        self.count_label.setStyleSheet("color:#6c757d;font-size:13px;font-weight:600;margin-left:10px;")
         header_row.addWidget(self._usr_title_lbl)
         header_row.addWidget(self.count_label)
         header_row.addStretch()
 
-        refresh_btn = QPushButton("\u27f3  Refresh")
-        refresh_btn.setObjectName("neutralBtn")
-        refresh_btn.clicked.connect(self.refresh_users)
         add_btn = QPushButton("\u002b  New User")
         add_btn.setObjectName("primaryBtn")
         add_btn.clicked.connect(self._open_new_user_dialog)
-        header_row.addWidget(refresh_btn)
         header_row.addWidget(add_btn)
         main_layout.addLayout(header_row)
 
-        # â”€â”€ Grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        grid = QGridLayout()
-        grid.setSpacing(16)
-        grid.setColumnStretch(0, 3)
-        grid.setColumnStretch(1, 2)
+        self.notify_bar = QWidget()
+        self.notify_bar.setObjectName("usrNotifyBar")
+        notify_layout = QHBoxLayout(self.notify_bar)
+        notify_layout.setContentsMargins(10, 8, 10, 8)
+        notify_layout.setSpacing(8)
+        self.notify_text = QLabel("")
+        self.notify_text.setObjectName("usrNotifyText")
+        notify_layout.addWidget(self.notify_text, 1)
+        self.notify_close_btn = QPushButton("×")
+        self.notify_close_btn.setObjectName("usrNotifyClose")
+        self.notify_close_btn.clicked.connect(self.notify_bar.hide)
+        notify_layout.addWidget(self.notify_close_btn)
+        self.notify_bar.hide()
+        main_layout.addWidget(self.notify_bar)
+
+        controls_row = QHBoxLayout()
+        controls_row.setSpacing(10)
+
+        self.search_input = QLineEdit()
+        self.search_input.setObjectName("usrSearchInput")
+        self.search_input.setPlaceholderText("Search by name, username, role, specialization, or contact")
+        self.search_input.textChanged.connect(self.refresh_users)
+        controls_row.addWidget(self.search_input, 1)
+
+        self.total_chip = QLabel("Total 0")
+        self.total_chip.setObjectName("usrStatTotal")
+        controls_row.addWidget(self.total_chip)
+
+        self.admin_chip = QLabel("Admin 0")
+        self.admin_chip.setObjectName("usrStatAdmin")
+        controls_row.addWidget(self.admin_chip)
+
+        self.specialists_chip = QLabel("Specialists 0")
+        self.specialists_chip.setObjectName("usrStatSpecialists")
+        controls_row.addWidget(self.specialists_chip)
+
+        self.viewer_chip = QLabel("Viewer 0")
+        self.viewer_chip.setObjectName("usrStatViewer")
+        controls_row.addWidget(self.viewer_chip)
+
+        main_layout.addLayout(controls_row)
 
         # Users table card
         self._usr_table_group = QGroupBox("Users")
         table_vbox = QVBoxLayout(self._usr_table_group)
-        table_vbox.setSpacing(8)
+        table_vbox.setSpacing(6)
 
-        self.users_table = QTableWidget(0, 3)
-        self.users_table.setHorizontalHeaderLabels(["Username", "Role", "Status"])
+        users_hdr = QHBoxLayout()
+        users_hdr.setContentsMargins(2, 0, 2, 2)
+        users_title = QLabel("Users")
+        users_title.setObjectName("usrSectionTitle")
+        users_hint = QLabel("Manage accounts, roles, and weekly availability")
+        users_hint.setObjectName("usrSectionHint")
+        users_hdr_col = QVBoxLayout()
+        users_hdr_col.setSpacing(0)
+        users_hdr_col.addWidget(users_title)
+        users_hdr_col.addWidget(users_hint)
+        users_hdr.addLayout(users_hdr_col)
+        users_hdr.addStretch()
+        table_vbox.addLayout(users_hdr)
+
+        self.users_table = QTableWidget(0, 6)
+        self.users_table.setObjectName("usrUsersTable")
+        self.users_table.setHorizontalHeaderLabels([
+            "Name", "Username", "Contact", "Availability Time", "Availability Days", "Role"
+        ])
         self.users_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.users_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.users_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.users_table.verticalHeader().setVisible(False)
-        self.users_table.setAlternatingRowColors(False)
-        self.users_table.setShowGrid(False)
+        self.users_table.setAlternatingRowColors(True)
+        self.users_table.setShowGrid(True)
+        self.users_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.users_table.customContextMenuRequested.connect(self._open_user_context_menu)
+        self.users_table.cellDoubleClicked.connect(self._edit_availability_from_cell)
+        self.users_table.horizontalHeader().setStretchLastSection(False)
         self.users_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.users_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.users_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
         self.users_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.users_table.setMinimumHeight(240)
+        self.users_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)
+        self.users_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.users_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.users_table.setColumnWidth(1, 140)
+        self.users_table.setColumnWidth(3, 165)
+        self.users_table.setMinimumHeight(200)
         table_vbox.addWidget(self.users_table)
 
         action_row = QHBoxLayout()
@@ -540,23 +958,56 @@ class UsersPage(QWidget):
         action_row.addWidget(self.reset_pw_btn)
         action_row.addWidget(self.delete_btn)
         table_vbox.addLayout(action_row)
-        grid.addWidget(self._usr_table_group, 0, 0)
 
         # Activity log card
         self._usr_log_group = QGroupBox("Activity Log")
         log_vbox = QVBoxLayout(self._usr_log_group)
-        self.activity_log = QTableWidget(0, 3)
-        self.activity_log.setHorizontalHeaderLabels(["User", "Action", "Time"])
+        log_hdr = QHBoxLayout()
+        log_hdr.setContentsMargins(2, 0, 2, 2)
+        log_title = QLabel("Activity Log")
+        log_title.setObjectName("usrSectionTitle")
+        log_hint = QLabel("Latest admin and account events")
+        log_hint.setObjectName("usrSectionHint")
+        log_hdr_col = QVBoxLayout()
+        log_hdr_col.setSpacing(0)
+        log_hdr_col.addWidget(log_title)
+        log_hdr_col.addWidget(log_hint)
+        log_hdr.addLayout(log_hdr_col)
+        log_hdr.addStretch()
+        log_vbox.addLayout(log_hdr)
+
+        self.activity_log = QTableWidget(0, 2)
+        self.activity_log.setObjectName("usrActivityTable")
+        self.activity_log.setHorizontalHeaderLabels(["Username", "Date-Time"])
         self.activity_log.setSelectionMode(QAbstractItemView.NoSelection)
         self.activity_log.setEditTriggers(QTableWidget.NoEditTriggers)
         self.activity_log.verticalHeader().setVisible(False)
         self.activity_log.setShowGrid(False)
-        self.activity_log.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.activity_log.setMinimumHeight(240)
+        self.activity_log.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.activity_log.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.activity_log.setMinimumHeight(175)
+        self.activity_log.setSortingEnabled(True)
         log_vbox.addWidget(self.activity_log)
-        grid.addWidget(self._usr_log_group, 0, 1)
 
-        main_layout.addLayout(grid)
+        self.admin_tabs = QTabWidget()
+        self.admin_tabs.setObjectName("usrAdminTabs")
+
+        users_tab = QWidget()
+        users_tab_layout = QVBoxLayout(users_tab)
+        users_tab_layout.setContentsMargins(8, 8, 8, 8)
+        users_tab_layout.setSpacing(0)
+        users_tab_layout.addWidget(self._usr_table_group)
+
+        activity_tab = QWidget()
+        activity_tab_layout = QVBoxLayout(activity_tab)
+        activity_tab_layout.setContentsMargins(8, 8, 8, 8)
+        activity_tab_layout.setSpacing(0)
+        activity_tab_layout.addWidget(self._usr_log_group)
+
+        self.admin_tabs.addTab(users_tab, "Users")
+        self.admin_tabs.addTab(activity_tab, "Activity Log")
+        self.admin_tabs.currentChanged.connect(self._handle_admin_tab_change)
+        main_layout.addWidget(self.admin_tabs, 1)
 
         # Status bar
         self.status_label = QLabel("Ready")
@@ -565,11 +1016,16 @@ class UsersPage(QWidget):
         main_layout.addWidget(self.status_label)
 
         self.refresh_users()
+        self.load_activity_log()
 
     # â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _open_new_user_dialog(self):
         NewUserDialog(parent=self).exec()
+
+    def _handle_admin_tab_change(self, index: int):
+        if index == 1:
+            self.load_activity_log()
 
     def _set_status(self, message, ok=True):
         color = "#198754" if ok else "#dc3545"
@@ -578,6 +1034,91 @@ class UsersPage(QWidget):
             f"color:{color};font-size:12px;font-weight:600;padding:2px 0;"
         )
         self.status_label.setText(f"{icon}  {message}")
+
+    def show_notification(self, message: str):
+        self.notify_text.setText(message)
+        self.notify_bar.show()
+
+    def _open_user_context_menu(self, pos):
+        item = self.users_table.itemAt(pos)
+        if item is None:
+            return
+        self.users_table.selectRow(item.row())
+
+        menu = QMenu(self)
+        edit_availability_action = menu.addAction("Edit Availability")
+        menu.addSeparator()
+        change_role_action = menu.addAction("Change Role")
+        reset_password_action = menu.addAction("Reset Password")
+        menu.addSeparator()
+        delete_action = menu.addAction("Delete User")
+
+        chosen = menu.exec(self.users_table.viewport().mapToGlobal(pos))
+        if chosen == edit_availability_action:
+            self.edit_selected_availability()
+        elif chosen == change_role_action:
+            self.change_selected_role()
+        elif chosen == reset_password_action:
+            self.reset_selected_password()
+        elif chosen == delete_action:
+            self.delete_user()
+
+    def _edit_availability_from_cell(self, row, column):
+        if column in (3, 4):
+            self.users_table.selectRow(row)
+            self.edit_selected_availability()
+
+    def _get_user_by_username(self, username: str):
+        target = str(username or "").strip().lower()
+        for user in user_store.get_all_users():
+            if str(user.get("username") or "").strip().lower() == target:
+                return user
+        return None
+
+    def edit_selected_availability(self):
+        row = self.users_table.currentRow()
+        if row == -1:
+            QMessageBox.warning(self, "No Selection", "Please select a user to edit availability.")
+            return
+
+        username_item = self.users_table.item(row, 1)
+        if not username_item:
+            return
+        username = username_item.text().strip()
+
+        user = self._get_user_by_username(username)
+        if not user:
+            QMessageBox.warning(self, "User Not Found", "Unable to load selected user details.")
+            return
+
+        initial_payload = None
+        raw_availability = user.get("availability_json")
+        if raw_availability:
+            try:
+                initial_payload = json.loads(raw_availability) if isinstance(raw_availability, str) else raw_availability
+            except Exception:
+                initial_payload = None
+
+        dialog = AvailabilityDialog(self, initial_availability=initial_payload)
+        dialog.setWindowTitle(f"Edit Availability - {username}")
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        availability_json = "" if dialog.skip_selected else dialog.get_availability_json()
+        acting_username, acting_role = self._actor_context()
+        success = user_store.update_user_availability(
+            username,
+            availability_json,
+            acting_username=acting_username,
+            acting_role=acting_role,
+        )
+        if not success:
+            QMessageBox.warning(self, "Update Failed", f"Could not update availability for '{username}'.")
+            return
+
+        self._set_status(f"Availability updated for '{username}'")
+        self.log_activity(username, "Availability updated")
+        self.refresh_users()
 
     def _actor_context(self):
         parent_app = getattr(self, "parent_app", None)
@@ -617,39 +1158,123 @@ class UsersPage(QWidget):
         app_stylesheet = app.styleSheet() if app else ""
         dark_mode = "#1e1e2e" in app_stylesheet
         role_colors = _ROLE_COLORS_DARK if dark_mode else _ROLE_COLORS
-        n = len(users)
-        self.count_label.setText(f"{n} user{'s' if n != 1 else ''}")
+
+        total_count = len(users)
+        admin_count = sum(1 for user in users if user.get("role") == "admin")
+        clinician_count = sum(1 for user in users if user.get("role") == "clinician")
+        viewer_count = sum(1 for user in users if user.get("role") == "viewer")
+
+        if hasattr(self, "total_chip"):
+            self.total_chip.setText(f"Total {total_count}")
+            self.admin_chip.setText(f"Admin {admin_count}")
+            self.specialists_chip.setText(f"Specialists {clinician_count}")
+            self.viewer_chip.setText(f"Viewer {viewer_count}")
+
+        query = ""
+        if hasattr(self, "search_input"):
+            query = self.search_input.text().strip().lower()
+
+        filtered_users = []
         for user in users:
+            role = str(user.get("role") or "")
+            specialization = str(user.get("specialization") or "")
+            haystack = " ".join(
+                [
+                    str(user.get("full_name") or ""),
+                    str(user.get("display_name") or ""),
+                    str(user.get("username") or ""),
+                    str(user.get("contact") or ""),
+                    role,
+                    specialization,
+                ]
+            ).lower()
+            if query and query not in haystack:
+                continue
+            filtered_users.append(user)
+
+        shown = len(filtered_users)
+        self.count_label.setText(f"Showing {shown} of {total_count} users")
+
+        for user in filtered_users:
             row = self.users_table.rowCount()
             self.users_table.insertRow(row)
 
+            name_item = QTableWidgetItem(user.get("full_name") or user["username"])
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             username_item = QTableWidgetItem(user["username"])
             username_item.setFlags(username_item.flags() & ~Qt.ItemIsEditable)
+            contact_item = QTableWidgetItem(str(user.get("contact") or ""))
+            contact_item.setFlags(contact_item.flags() & ~Qt.ItemIsEditable)
+
+            availability_time_text = "Not set"
+            availability_days_text = "Not set"
+            raw_availability = user.get("availability_json")
+            if raw_availability:
+                try:
+                    payload = json.loads(raw_availability) if isinstance(raw_availability, str) else raw_availability
+                except Exception:
+                    payload = {}
+
+                if isinstance(payload, dict):
+                    start_time = str(payload.get("start_time") or "").strip()
+                    end_time = str(payload.get("end_time") or "").strip()
+                    if start_time and end_time:
+                        parsed_start = AvailabilityDialog._parse_time_value(start_time)
+                        parsed_end = AvailabilityDialog._parse_time_value(end_time)
+                        if parsed_start.isValid() and parsed_end.isValid():
+                            availability_time_text = (
+                                f"{parsed_start.toString('hh:mm AP')} - {parsed_end.toString('hh:mm AP')}"
+                            )
+                        else:
+                            availability_time_text = f"{start_time} - {end_time}"
+
+                    selected_days = payload.get("days") or []
+
+                    # Backward compatibility with older payloads that stored concrete dates.
+                    if not selected_days:
+                        legacy_dates = payload.get("dates") or []
+                        if isinstance(legacy_dates, list):
+                            derived = []
+                            for date_value in legacy_dates:
+                                try:
+                                    derived.append(datetime.strptime(str(date_value), "%Y-%m-%d").date().strftime("%a").lower())
+                                except Exception:
+                                    pass
+                            selected_days = derived
+
+                    if isinstance(selected_days, list) and selected_days:
+                        ordered = []
+                        for day_key, _ in _WEEKDAY_OPTIONS:
+                            if any(str(value).strip().lower() == day_key for value in selected_days):
+                                ordered.append(_WEEKDAY_LABELS[day_key][:3])
+                        if ordered:
+                            availability_days_text = ", ".join(ordered)
+
+            availability_time_item = QTableWidgetItem(availability_time_text)
+            availability_time_item.setFlags(availability_time_item.flags() & ~Qt.ItemIsEditable)
+            availability_days_item = QTableWidgetItem(availability_days_text)
+            availability_days_item.setFlags(availability_days_item.flags() & ~Qt.ItemIsEditable)
 
             role = user["role"]
-            role_item = QTableWidgetItem(f"  {role}  ")
+            specialization = str(user.get("specialization") or "").strip()
+            display_role = specialization if role == "clinician" and specialization else role
+            role_item = QTableWidgetItem(f"  {display_role}  ")
             role_item.setFlags(role_item.flags() & ~Qt.ItemIsEditable)
             role_item.setTextAlignment(Qt.AlignCenter)
+            role_item.setData(Qt.UserRole, role)
             fg, bg = role_colors.get(role, ("#212529", "#f8f9fa"))
             role_item.setForeground(QColor(fg))
             role_item.setBackground(QColor(bg))
 
-            status_item = QTableWidgetItem("Active")
-            status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
-            status_item.setTextAlignment(Qt.AlignCenter)
-            status_item.setForeground(QColor("#198754"))
-
-            self.users_table.setItem(row, 0, username_item)
-            self.users_table.setItem(row, 1, role_item)
-            self.users_table.setItem(row, 2, status_item)
-
-            role_badge = QLabel(role)
-            role_badge.setAlignment(Qt.AlignCenter)
-            role_badge.setStyleSheet(
-                f"color:{fg}; background:{bg}; border-radius:6px; padding:4px 8px; font-weight:600;"
-            )
-            self.users_table.setCellWidget(row, 1, role_badge)
+            self.users_table.setItem(row, 0, name_item)
+            self.users_table.setItem(row, 1, username_item)
+            self.users_table.setItem(row, 2, contact_item)
+            self.users_table.setItem(row, 3, availability_time_item)
+            self.users_table.setItem(row, 4, availability_days_item)
+            self.users_table.setItem(row, 5, role_item)
         self.users_table.resizeRowsToContents()
+        if hasattr(self, "activity_log"):
+            self.load_activity_log()
 
     # â”€â”€ CRUD Actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -659,13 +1284,13 @@ class UsersPage(QWidget):
             QMessageBox.warning(self, "No Selection", "Please select a user to delete.")
             return
 
-        username_item = self.users_table.item(row, 0)
-        role_item = self.users_table.item(row, 1)
+        username_item = self.users_table.item(row, 1)
+        role_item = self.users_table.item(row, 5)
         if not username_item or not role_item:
             return
 
         username = username_item.text()
-        role = role_item.text().strip()
+        role = str(role_item.data(Qt.UserRole) or role_item.text().strip())
         current_username, current_role = self._actor_context()
 
         if role == "admin" and current_role == "admin" and username != current_username:
@@ -707,19 +1332,29 @@ class UsersPage(QWidget):
             QMessageBox.warning(self, "No Selection", "Please select a user to change their role.")
             return
 
-        username_item = self.users_table.item(row, 0)
-        role_item = self.users_table.item(row, 1)
+        username_item = self.users_table.item(row, 1)
+        role_item = self.users_table.item(row, 5)
         if not username_item or not role_item:
             return
 
         username = username_item.text()
-        current_role_val = role_item.text().strip()
+        current_role_val = str(role_item.data(Qt.UserRole) or role_item.text().strip())
 
         dlg = ChangeRoleDialog(username, current_role_val, parent=self)
         if dlg.exec() != QDialog.Accepted:
             return
         new_role = dlg.selected_role()
         if new_role == current_role_val:
+            return
+
+        proceed = QMessageBox.question(
+            self,
+            "Confirm Role Change",
+            f"Change role for '<b>{username}</b>' from <b>{current_role_val}</b> to <b>{new_role}</b>?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if proceed != QMessageBox.Yes:
             return
 
         acting_password = self.prompt_for_admin_password(
@@ -751,13 +1386,23 @@ class UsersPage(QWidget):
         if row == -1:
             QMessageBox.warning(self, "No Selection", "Please select a user to reset their password.")
             return
-        username_item = self.users_table.item(row, 0)
+        username_item = self.users_table.item(row, 1)
         if not username_item:
             return
         username = username_item.text()
 
         dlg = ResetPasswordDialog(username, parent=self)
         if dlg.exec() != QDialog.Accepted:
+            return
+
+        proceed = QMessageBox.question(
+            self,
+            "Confirm Password Reset",
+            f"Reset password for '<b>{username}</b>' now?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if proceed != QMessageBox.Yes:
             return
 
         acting_password = self.prompt_for_admin_password(self, f"reset '{username}' password")
@@ -783,12 +1428,32 @@ class UsersPage(QWidget):
             QMessageBox.warning(self, "Reset Failed", f"Could not reset password for '{username}'.")
 
     def log_activity(self, user, action):
-        from datetime import datetime
-        row = self.activity_log.rowCount()
-        self.activity_log.insertRow(row)
-        self.activity_log.setItem(row, 0, QTableWidgetItem(user))
-        self.activity_log.setItem(row, 1, QTableWidgetItem(action))
-        self.activity_log.setItem(row, 2, QTableWidgetItem(datetime.now().strftime("%H:%M:%S")))
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        user_store.log_activity(user, action, timestamp)
+        self.load_activity_log()
+
+    def load_activity_log(self):
+        entries = user_store.get_recent_activity(limit=120)
+        self.activity_log.setSortingEnabled(False)
+        self.activity_log.setRowCount(0)
+        for entry in entries:
+            row = self.activity_log.rowCount()
+            self.activity_log.insertRow(row)
+
+            username = str(entry.get("username") or "").strip()
+            timestamp = str(entry.get("time") or "").strip()
+
+            username_item = QTableWidgetItem(username)
+            time_item = QTableWidgetItem(timestamp)
+
+            username_item.setFlags(username_item.flags() & ~Qt.ItemIsEditable)
+            time_item.setFlags(time_item.flags() & ~Qt.ItemIsEditable)
+
+            self.activity_log.setItem(row, 0, username_item)
+            self.activity_log.setItem(row, 1, time_item)
+
+        self.activity_log.setSortingEnabled(True)
+        self.activity_log.sortItems(1, Qt.DescendingOrder)
 
     def apply_language(self, language: str):
         from translations import get_pack
@@ -796,4 +1461,7 @@ class UsersPage(QWidget):
         self._usr_title_lbl.setText(pack["usr_title"])
         self._usr_table_group.setTitle(pack["usr_table"])
         self._usr_log_group.setTitle(pack["usr_log"])
+        if hasattr(self, "admin_tabs"):
+            self.admin_tabs.setTabText(0, pack["usr_table"])
+            self.admin_tabs.setTabText(1, pack["usr_log"])
 
