@@ -4,6 +4,7 @@ Contains main application window and dashboard functionality.
 """
 
 import contextlib
+import json
 import os
 import random
 import re
@@ -12,10 +13,11 @@ from datetime import datetime
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-    QStackedWidget, QGroupBox, QMessageBox, QGridLayout, QProgressBar, QSizePolicy
+    QStackedWidget, QGroupBox, QMessageBox, QProgressBar, QSizePolicy,
+    QFrame
 )
 from PySide6.QtCore import Qt, QSize, QByteArray
-from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont, QShortcut, QKeySequence
+from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont, QShortcut, QKeySequence, QColor, QGuiApplication
 from PySide6.QtSvg import QSvgRenderer
 
 from screening import ScreeningPage
@@ -25,24 +27,43 @@ from settings import SettingsPage, DARK_STYLESHEET
 from help_support import HelpSupportPage
 from camera import CameraPage
 from auth import DB_FILE
+from user_auth import get_user_profile
 
 
 class EyeShieldApp(QMainWindow):
     """Main application window"""
 
-    def __init__(self, username, role):
+    ROLE_PAGE_ACCESS = {
+        "admin": {4, 5, 6},
+        "clinician": {0, 1, 2, 3, 5, 6},
+    }
+
+    def __init__(self, username, role, display_name=None, full_name=None, specialization=None, contact=None):
         super().__init__()
 
         self.username = username
         self.role = role
+        self.full_name = str(full_name or "").strip()
+        self.display_name = str(display_name or os.environ.get("EYESHIELD_CURRENT_NAME") or username).strip()
+        self.specialization = str(specialization or os.environ.get("EYESHIELD_CURRENT_SPECIALIZATION") or "").strip()
+        self.contact = str(contact or os.environ.get("EYESHIELD_CURRENT_CONTACT") or "").strip()
+        self.display_title = self.specialization if self.role == "clinician" and self.specialization else self.role
+        self.allowed_pages = self._allowed_pages_for_role(role)
         self._dark_mode = False
         self._saved_styles = {}
         self._logging_out = False
         self._current_language = "English"
 
         self.setWindowTitle("EyeShield – DR Screening")
-        self.setMinimumSize(1100, 700)
-        self.resize(1400, 860)
+        self.setMinimumSize(900, 560)
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            target_width = min(1400, max(1024, int(available.width() * 0.95)))
+            target_height = min(860, max(620, int(available.height() * 0.92)))
+            self.resize(target_width, target_height)
+        else:
+            self.resize(1280, 720)
 
         # Set app icon
         _icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", "eyeshield_icon.svg")
@@ -198,12 +219,16 @@ class EyeShieldApp(QMainWindow):
         nav_labels = []
         nav_label_originals = []
         for nav_item in navs:
-            if nav_item["requires_admin"] and self.role != "admin":
+            if nav_item["page_index"] not in self.allowed_pages:
                 continue
             w, btn, label = nav_button_with_label(nav_item["icon"], nav_item["label"])
             btn.setProperty("pageIndex", nav_item["page_index"])
             btn.setProperty("navKey", nav_item["label"])
             label.setProperty("pageIndex", nav_item["page_index"])
+
+            # Seed icon immediately so first paint never shows a missing nav icon.
+            self._set_button_svg_icon(btn, nav_item["icon"], "#495057", QSize(24, 24))
+
             nav_layout.addWidget(w)
             nav_layout.addStretch(1)
             nav_widgets.append(w)
@@ -217,7 +242,7 @@ class EyeShieldApp(QMainWindow):
         self._nav_label_originals = nav_label_originals
 
         # User info on the right — styled as a pill badge
-        user_info = QLabel(f"  {self.username}  \u2022  {self.role}  ")
+        user_info = QLabel(f"  {self.display_name}  \u2022  {self.display_title}  ")
         self.user_info_label = user_info
         user_info.setObjectName("userInfo")
         user_info.setStyleSheet(
@@ -254,10 +279,7 @@ class EyeShieldApp(QMainWindow):
 
         for button in nav_buttons:
             page_index = int(button.property("pageIndex"))
-            requires_admin = page_index == 4
-            button.clicked.connect(
-                lambda checked=False, idx=page_index, admin_only=requires_admin: self._navigate_to(idx, requires_admin=admin_only)
-            )
+            button.clicked.connect(lambda checked=False, idx=page_index: self._navigate_to(idx))
 
         # (All navigation button connections are now handled via nav_buttons list above)
 
@@ -274,7 +296,12 @@ class EyeShieldApp(QMainWindow):
         # Create main pages first so dashboard can query live data
         self.screening_page = ScreeningPage()
         self.camera_page = CameraPage()
-        self.reports_page = ReportsPage(self.username, self.role)
+        self.reports_page = ReportsPage(
+            self.username,
+            self.role,
+            display_name=self.display_name,
+            specialization=self.specialization,
+        )
         self.reports_page.records_changed_callback = self.refresh_dashboard
         self.users_page = UsersPage()
         self.settings_page = SettingsPage()
@@ -302,10 +329,13 @@ class EyeShieldApp(QMainWindow):
         self._save_shortcut.activated.connect(self._global_save_shortcut)
 
         self.refresh_dashboard()
-        self._set_active_nav(0)
+        self.pages.setCurrentIndex(self._default_page_index())
+        self._set_active_nav(self.pages.currentIndex())
 
         # Ensure nav bar styles are correct for the initial theme
         self._apply_nav_theme(False)
+        # Re-apply active state after theme bootstrap so startup icons/buttons are visible.
+        self._set_active_nav(self.pages.currentIndex())
 
         # Apply saved theme from settings (must run after all pages are parented)
         saved_theme = self.settings_page.theme_combo.currentText()
@@ -317,22 +347,15 @@ class EyeShieldApp(QMainWindow):
         if saved_lang != "English":
             self.apply_language(saved_lang)
 
-        if hasattr(self, "screening_page") and hasattr(self.screening_page, "has_draft_session"):
-            if self.screening_page.has_draft_session():
-                draft_time = self.screening_page.draft_timestamp() if hasattr(self.screening_page, "draft_timestamp") else "recent session"
-                box = QMessageBox(self)
-                box.setWindowTitle("Unsaved Session Found")
-                box.setIcon(QMessageBox.Icon.Information)
-                box.setText(f"An unsaved session was found from {draft_time}. Would you like to restore it?")
-                restore_btn = box.addButton("Restore Session", QMessageBox.ButtonRole.AcceptRole)
-                discard_btn = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
-                box.setDefaultButton(restore_btn)
-                box.exec()
-                if box.clickedButton() == restore_btn and hasattr(self.screening_page, "restore_draft_session"):
-                    self.screening_page.restore_draft_session()
-                    self.pages.setCurrentIndex(1)
-                elif box.clickedButton() == discard_btn and hasattr(self.screening_page, "discard_draft_session"):
-                    self.screening_page.discard_draft_session()
+    @classmethod
+    def _allowed_pages_for_role(cls, role: str) -> set[int]:
+        return set(cls.ROLE_PAGE_ACCESS.get(str(role or "").lower(), cls.ROLE_PAGE_ACCESS["clinician"]))
+
+    def _is_page_allowed(self, index: int) -> bool:
+        return index in self.allowed_pages
+
+    def _default_page_index(self) -> int:
+        return 0 if 0 in self.allowed_pages else min(self.allowed_pages)
 
     @staticmethod
     def _load_svg_pixmap(svg_path: str, size: int = 64) -> QPixmap:
@@ -355,17 +378,16 @@ class EyeShieldApp(QMainWindow):
                 svg_text = f.read()
         except OSError:
             return QPixmap()
-        svg_text = svg_text.replace('stroke="currentColor"', f'stroke="{color}"')
-        svg_text = svg_text.replace('fill="currentColor"', f'fill="{color}"')
-        svg_text = svg_text.replace('stroke="black"', f'stroke="{color}"')
-        svg_text = svg_text.replace('fill="black"', f'fill="{color}"')
-        svg_text = svg_text.replace('stroke="#000"', f'stroke="{color}"')
-        svg_text = svg_text.replace('fill="#000"', f'fill="{color}"')
-        svg_text = svg_text.replace('stroke="#000000"', f'stroke="{color}"')
-        svg_text = svg_text.replace('fill="#000000"', f'fill="{color}"')
-        svg_text = svg_text.replace('stroke="#e3e3e3"', f'stroke="{color}"')
-        svg_text = svg_text.replace('fill="#e3e3e3"', f'fill="{color}"')
-        svg_text = svg_text.replace('fill="white"', 'fill="transparent"')
+
+        def _replace_paint(match: re.Match) -> str:
+            attr = match.group(1)
+            value = match.group(2)
+            if value.lower() in {"none", "transparent"}:
+                return match.group(0)
+            return f'{attr}="{color}"'
+
+        svg_text = re.sub(r'(fill|stroke)=["\']([^"\']+)["\']', _replace_paint, svg_text, flags=re.IGNORECASE)
+
         data = QByteArray(svg_text.encode("utf-8"))
         renderer = QSvgRenderer(data)
         if not renderer.isValid():
@@ -390,12 +412,78 @@ class EyeShieldApp(QMainWindow):
         if not svg_path:
             button.setIcon(QIcon())
             return
+        is_users_icon = os.path.basename(str(svg_path or "")).lower() == "users.svg"
         pixmap = self._load_svg_pixmap_colored(svg_path, color, 256)
+        if is_users_icon and not self._pixmap_has_visible_pixels(pixmap):
+            pixmap = QPixmap()
         if pixmap.isNull():
-            button.setIcon(QIcon())
-            return
+            # Fallback: rasterize first, then tint non-transparent pixels so icons remain visible.
+            base_pixmap = self._load_svg_pixmap(svg_path, 256)
+            if not base_pixmap.isNull():
+                pixmap = self._tint_pixmap(base_pixmap, color)
+                if is_users_icon and not self._pixmap_has_visible_pixels(pixmap):
+                    pixmap = QPixmap()
+            if pixmap.isNull() and is_users_icon:
+                pixmap = self._build_users_fallback_pixmap(color, 256)
+            if pixmap.isNull():
+                # Last-resort fallback to native loading.
+                button.setIcon(QIcon(svg_path))
+                button.setIconSize(size)
+                return
         button.setIcon(QIcon(pixmap))
         button.setIconSize(size)
+
+    @staticmethod
+    def _pixmap_has_visible_pixels(pixmap: QPixmap, min_alpha: int = 24, min_coverage: float = 0.008) -> bool:
+        if pixmap.isNull():
+            return False
+        image = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+        width = image.width()
+        height = image.height()
+        if width <= 0 or height <= 0:
+            return False
+        visible = 0
+        total = width * height
+        for y in range(height):
+            for x in range(width):
+                if image.pixelColor(x, y).alpha() >= min_alpha:
+                    visible += 1
+        return (visible / float(total)) >= float(min_coverage)
+
+    @staticmethod
+    def _build_users_fallback_pixmap(color: str, size: int = 64) -> QPixmap:
+        """Draw a simple users glyph as a hard fallback when SVG rendering is unreliable."""
+        image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+        image.fill(Qt.transparent)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(color))
+
+        # Main avatar
+        painter.drawEllipse(int(size * 0.34), int(size * 0.17), int(size * 0.32), int(size * 0.32))
+        painter.drawRoundedRect(int(size * 0.20), int(size * 0.52), int(size * 0.60), int(size * 0.28), 12, 12)
+
+        # Secondary avatar
+        painter.drawEllipse(int(size * 0.10), int(size * 0.27), int(size * 0.22), int(size * 0.22))
+        painter.drawRoundedRect(int(size * 0.06), int(size * 0.58), int(size * 0.28), int(size * 0.19), 8, 8)
+
+        painter.end()
+        return QPixmap.fromImage(image)
+
+    @staticmethod
+    def _tint_pixmap(source: QPixmap, color: str) -> QPixmap:
+        """Tint a source pixmap using SourceIn composition to preserve alpha shape."""
+        if source.isNull():
+            return QPixmap()
+        tinted = QPixmap(source.size())
+        tinted.fill(Qt.transparent)
+        painter = QPainter(tinted)
+        painter.drawPixmap(0, 0, source)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), color)
+        painter.end()
+        return tinted
 
     def _refresh_nav_button_icons(self, active_index: int):
         """Recolor navigation SVG icons to match active/inactive and theme state."""
@@ -519,9 +607,37 @@ class EyeShieldApp(QMainWindow):
 
     # Sidebar removed; navigation is now in the top bar
 
-    def _navigate_to(self, index, requires_admin=False):
-        if requires_admin and self.role != "admin":
-            QMessageBox.warning(self, "Access Denied", "Only admins can access the Users tab.")
+    def _is_screening_navigation_locked(self) -> bool:
+        return bool(
+            hasattr(self, "screening_page")
+            and hasattr(self.screening_page, "is_navigation_locked")
+            and self.screening_page.is_navigation_locked()
+        )
+
+    def _refresh_navigation_lock(self):
+        if not hasattr(self, "nav_buttons"):
+            return
+        locked = self._is_screening_navigation_locked()
+        for btn in self.nav_buttons:
+            page_index = int(btn.property("pageIndex") or -1)
+            btn.setEnabled((not locked) or page_index == 1)
+        current_index = self.pages.currentIndex() if hasattr(self, "pages") else 0
+        self._set_active_nav(current_index)
+
+    def _navigate_to(self, index, show_denied_message=True):
+        if self._is_screening_navigation_locked() and index != 1:
+            if show_denied_message:
+                QMessageBox.information(
+                    self,
+                    "Screening In Progress",
+                    "Please wait for the image analysis to finish before changing tabs.",
+                )
+            if hasattr(self, "pages"):
+                self.pages.setCurrentIndex(1)
+            return
+        if not self._is_page_allowed(index):
+            if show_denied_message:
+                QMessageBox.warning(self, "Access Denied", "Your account role cannot access this page.")
             return
         self.pages.setCurrentIndex(index)
 
@@ -535,6 +651,12 @@ class EyeShieldApp(QMainWindow):
                 self.screening_page.results_page.save_patient()
 
     def _on_page_changed(self, index):
+        if self._is_screening_navigation_locked() and index != 1:
+            self.pages.setCurrentIndex(1)
+            return
+        if not self._is_page_allowed(index):
+            self.pages.setCurrentIndex(self._default_page_index())
+            return
         self._set_active_nav(index)
         if index == 2:
             self.camera_page.enter_page()
@@ -586,6 +708,7 @@ class EyeShieldApp(QMainWindow):
             """
             active_label = "font-size: 10px; color: #89b4fa; margin-top: 0px; text-decoration: none; border: none;"
             inactive_label = "font-size: 10px; color: #a6adc8; margin-top: 0px; text-decoration: none; border: none;"
+            disabled_label = "font-size: 10px; color: #6c7086; margin-top: 0px; text-decoration: none; border: none;"
         else:
             active_btn_style = """
                 QPushButton {
@@ -621,6 +744,7 @@ class EyeShieldApp(QMainWindow):
             active_label = "font-size: 10px; color: #005ecb; font-weight: 700; margin-top: 0px; text-decoration: none; border: none;"
             screening_active_label = "font-size: 10px; color: #0066ff; font-weight: 800; margin-top: 0px; text-decoration: none; border: none;"
             inactive_label = "font-size: 10px; color: #495057; margin-top: 0px; text-decoration: none; border: none;"
+            disabled_label = "font-size: 10px; color: #adb5bd; margin-top: 0px; text-decoration: none; border: none;"
 
         for btn in self.nav_buttons:
             btn_index = int(btn.property("pageIndex") or -1)
@@ -630,6 +754,8 @@ class EyeShieldApp(QMainWindow):
                     btn.setStyleSheet(screening_active_btn_style)
                 else:
                     btn.setStyleSheet(active_btn_style)
+            elif not btn.isEnabled():
+                btn.setStyleSheet(inactive_btn_style)
             elif btn.isEnabled():
                 btn.setStyleSheet(inactive_btn_style)
         for i, label in enumerate(self.nav_labels):
@@ -639,6 +765,8 @@ class EyeShieldApp(QMainWindow):
                     label.setStyleSheet(screening_active_label)
                 else:
                     label.setStyleSheet(active_label)
+            elif not self.nav_buttons[i].isEnabled():
+                label.setStyleSheet(disabled_label)
             elif self.nav_buttons[i].isEnabled():
                 label.setStyleSheet(inactive_label)
         self._refresh_nav_button_icons(index)
@@ -738,6 +866,9 @@ class EyeShieldApp(QMainWindow):
         current_idx = self.pages.currentIndex()
         self._set_active_nav(current_idx)
 
+        if hasattr(self, "screening_page") and hasattr(self.screening_page, "apply_theme"):
+            self.screening_page.apply_theme(theme)
+
         # Update nav icon for the new theme
         self._update_nav_icon(self._dark_mode)
 
@@ -768,15 +899,13 @@ class EyeShieldApp(QMainWindow):
 
         # Dashboard welcome label
         if hasattr(self, "welcome_label"):
-            self.welcome_label.setText(f"{pack['dash_welcome']}, {self.username}")
+            self.welcome_label.setText(f"{pack['dash_welcome']}, {self.display_name}")
 
         # Dashboard section headers
         if hasattr(self, "_dash_severity_title_lbl"):
             self._dash_severity_title_lbl.setText("SCREENED PATIENTS")
-        if hasattr(self, "_dash_impact_title_lbl"):
-            self._dash_impact_title_lbl.setText("CLINICAL IMPACT")
-        if hasattr(self, "impact_cta_btn"):
-            self.impact_cta_btn.setText("Review High-Risk Cases")
+        if hasattr(self, "_dash_recent_title_lbl"):
+            self._dash_recent_title_lbl.setText(pack.get("dash_recent", "RECENT SCREENINGS"))
 
         # KPI card title labels (stored with objectName pattern)
         kpi_map = {
@@ -856,6 +985,12 @@ class EyeShieldApp(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        try:
+            import user_store
+            user_store.log_activity(self.username, "Logout")
+        except Exception:
+            pass
+
         from login import LoginWindow
         self._logging_out = True
         self.login = LoginWindow()
@@ -879,23 +1014,18 @@ class EyeShieldApp(QMainWindow):
         hero_layout.setContentsMargins(20, 18, 20, 18)
         hero_layout.setSpacing(12)
 
-        self.welcome_label = QLabel(f"Welcome back, {self.username}")
+        self.welcome_label = QLabel(f"Welcome back, {self.display_name}")
         self.welcome_label.setObjectName("welcomeGreeting")
         self.welcome_label.setStyleSheet(
             "color: #212529; font-size: 25px; font-weight: 700; background: transparent;"
         )
 
-        self.welcome_role_label = QLabel(f"{self.role.capitalize()}")
+        self.welcome_role_label = QLabel(f"{self.display_title.capitalize()}")
         self.welcome_role_label.setObjectName("welcomeRole")
         self.welcome_role_label.setStyleSheet(
             "color: #6c757d; font-size: 13px; font-weight: 600; background: transparent;"
         )
 
-        self.welcome_hint_label = QLabel("Track screening quality and triage priorities at a glance.")
-        self.welcome_hint_label.setObjectName("welcomeHint")
-        self.welcome_hint_label.setStyleSheet(
-            "color: #486581; font-size: 12px; font-weight: 500; background: transparent;"
-        )
 
         self.dashboard_date_label = QLabel("")
         self.dashboard_date_label.setObjectName("dashDate")
@@ -911,7 +1041,6 @@ class EyeShieldApp(QMainWindow):
         left_col.setSpacing(4)
         left_col.addWidget(self.welcome_label)
         left_col.addWidget(self.welcome_role_label)
-        left_col.addWidget(self.welcome_hint_label)
         left_col.addStretch(1)
         welcome_row.addLayout(left_col)
         welcome_row.addStretch()
@@ -924,56 +1053,51 @@ class EyeShieldApp(QMainWindow):
         kpi_row.setSpacing(16)
 
         def make_kpi_card(object_name, title_text, accent):
-            """Build a single KPI card with title, value, and secondary line."""
+            """Build a single KPI card with title and value."""
             card = QWidget()
             card.setObjectName(object_name)
-            card.setMinimumHeight(126)
+            card.setMinimumHeight(96)
             card.setStyleSheet(f"""
                 QWidget#{object_name} {{
                     background: white;
                     border: 1px solid #dee2e6;
                     border-left: 4px solid {accent};
-                    border-radius: 12px;
+                    border-radius: 10px;
                 }}
             """)
             v = QVBoxLayout(card)
-            v.setContentsMargins(16, 12, 16, 12)
-            v.setSpacing(6)
+            v.setContentsMargins(14, 10, 14, 10)
+            v.setSpacing(4)
 
             title = QLabel(title_text)
             title.setObjectName(f"{object_name}_title")
             title.setStyleSheet(
                 "color: #6c757d; font-size: 10px; font-weight: 700;"
-                "letter-spacing: 0.9px; text-transform: uppercase; background: transparent;"
+                "letter-spacing: 0.7px; text-transform: uppercase; background: transparent;"
             )
             value = QLabel("—")
             value.setObjectName(f"{object_name}_value")
-            value.setStyleSheet("font-size: 32px; font-weight: 700; color: #212529; background: transparent;")
-
-            subtitle = QLabel("")
-            subtitle.setObjectName(f"{object_name}_sub")
-            subtitle.setStyleSheet("font-size: 11px; color: #6c757d; background: transparent;")
+            value.setStyleSheet("font-size: 24px; font-weight: 800; color: #212529; background: transparent;")
 
             v.addWidget(title)
             v.addWidget(value)
-            v.addWidget(subtitle)
             v.addStretch()
-            return card, value, subtitle
+            return card, value
 
         # Card 1: Total Screenings
-        card_total, self.total_screenings_value, self.total_sub = \
+        card_total, self.total_screenings_value = \
             make_kpi_card("kpiTotal", "TOTAL SCREENINGS", "#0066cc")
 
         # Card 2: No DR Cases
-        card_patients, self.unique_patients_value, self.unique_patients_sub = \
+        card_patients, self.unique_patients_value = \
             make_kpi_card("kpiPatients", "NO DR CASES", "#2e7d32")
 
         # Card 3: Abnormal Cases
-        card_abnormal, self.abnormal_cases_value, self.abnormal_cases_sub = \
+        card_abnormal, self.abnormal_cases_value = \
             make_kpi_card("kpiAbnormal", "ABNORMAL CASES", "#f59e0b")
 
         # Card 4: High Risk Cases
-        card_high_risk, self.high_risk_cases_value, self.high_risk_cases_sub = \
+        card_high_risk, self.high_risk_cases_value = \
             make_kpi_card("kpiHighRisk", "HIGH RISK CASES", "#dc3545")
 
         kpi_row.addWidget(card_total, 1)
@@ -1088,7 +1212,7 @@ class EyeShieldApp(QMainWindow):
 
         content_row.addWidget(severity_card, 7)
 
-        # Right: impact panel
+        # Right sidebar: My Availability & Recent Screenings
         sidebar = QWidget()
         sidebar.setObjectName("dashSidebar")
         sidebar.setStyleSheet("QWidget#dashSidebar { background: transparent; }")
@@ -1096,89 +1220,50 @@ class EyeShieldApp(QMainWindow):
         sidebar_v.setContentsMargins(0, 0, 0, 0)
         sidebar_v.setSpacing(12)
 
-        impact_card = QWidget()
-        impact_card.setObjectName("impactCard")
-        impact_card.setStyleSheet("""
-            QWidget#impactCard {
-                background: white;
-                border: 1px solid #dee2e6;
-                border-radius: 12px;
-            }
-        """)
-        impact_v = QVBoxLayout(impact_card)
-        impact_v.setContentsMargins(16, 12, 16, 12)
-        impact_v.setSpacing(10)
+        # My Availability
+        availability_card = QWidget()
+        availability_card.setObjectName("availabilityCard")
+        availability_v = QVBoxLayout(availability_card)
+        availability_v.setContentsMargins(16, 12, 16, 12)
+        availability_v.setSpacing(8)
 
-        self._dash_impact_title_lbl = QLabel("CLINICAL IMPACT")
-        self._dash_impact_title_lbl.setStyleSheet(
-            "color: #6c757d; font-size: 10px; font-weight: 700;"
-            "letter-spacing: 0.9px; background: transparent;"
-        )
-        impact_v.addWidget(self._dash_impact_title_lbl)
+        self._dash_availability_title_lbl = QLabel("MY AVAILABILITY")
+        availability_v.addWidget(self._dash_availability_title_lbl)
 
-        self.impact_priority_label = QLabel("No urgent cases in the current queue")
-        self.impact_priority_label.setWordWrap(True)
-        self.impact_priority_label.setStyleSheet(
-            "font-size: 14px; font-weight: 700; color: #1d4f91;"
-            "background: #eaf3ff; border: 1px solid #c9dffc; border-radius: 10px;"
-            "padding: 10px 12px;"
-        )
-        impact_v.addWidget(self.impact_priority_label)
+        self.availability_days_label = QLabel("Days: Not set")
+        self.availability_days_label.setWordWrap(True)
+        availability_v.addWidget(self.availability_days_label)
 
-        self.impact_summary_label = QLabel("No screenings yet")
-        self.impact_summary_label.setWordWrap(True)
-        self.impact_summary_label.setStyleSheet("font-size: 12px; color: #486581; background: transparent;")
-        impact_v.addWidget(self.impact_summary_label)
+        self.availability_time_label = QLabel("Hours: Not set")
+        self.availability_time_label.setWordWrap(True)
+        availability_v.addWidget(self.availability_time_label)
 
-        metric_grid = QGridLayout()
-        metric_grid.setHorizontalSpacing(8)
-        metric_grid.setVerticalSpacing(8)
+        self.availability_updated_label = QLabel("Update this from Users > Edit Availability")
+        self.availability_updated_label.setWordWrap(True)
+        availability_v.addWidget(self.availability_updated_label)
 
-        def make_metric_chip(name, title_text):
-            chip = QWidget()
-            chip.setObjectName(name)
-            chip.setMinimumHeight(88)
-            chip_v = QVBoxLayout(chip)
-            chip_v.setContentsMargins(10, 8, 10, 8)
-            chip_v.setSpacing(3)
+        sidebar_v.addWidget(availability_card)
 
-            title = QLabel(title_text)
-            title.setObjectName(f"{name}_title")
-            value = QLabel("0")
-            value.setObjectName(f"{name}_value")
-            sub = QLabel("0.0%")
-            sub.setObjectName(f"{name}_sub")
+        # Recent Screenings
+        recent_card = QWidget()
+        recent_card.setObjectName("recentCard")
+        recent_v = QVBoxLayout(recent_card)
+        recent_v.setContentsMargins(16, 12, 16, 12)
+        recent_v.setSpacing(10)
 
-            chip_v.addWidget(title)
-            chip_v.addWidget(value)
-            chip_v.addWidget(sub)
-            return chip, value, sub
+        self._dash_recent_title_lbl = QLabel("RECENT SCREENINGS")
+        recent_v.addWidget(self._dash_recent_title_lbl)
 
-        chip_high, self.impact_high_value, self.impact_high_sub = make_metric_chip("impactHigh", "High Risk")
-        chip_abnormal, self.impact_abnormal_value, self.impact_abnormal_sub = make_metric_chip("impactAbnormal", "Abnormal")
-        chip_clear, self.impact_clear_value, self.impact_clear_sub = make_metric_chip("impactClear", "No DR")
+        self.recent_list_layout = QVBoxLayout()
+        self.recent_list_layout.setSpacing(8)
+        recent_v.addLayout(self.recent_list_layout)
+        recent_v.addStretch(1)
 
-        metric_grid.addWidget(chip_high, 0, 0)
-        metric_grid.addWidget(chip_abnormal, 0, 1)
-        metric_grid.addWidget(chip_clear, 1, 0, 1, 2)
-        impact_v.addLayout(metric_grid)
-
-        self.impact_recent_label = QLabel("Latest record: none")
-        self.impact_recent_label.setWordWrap(True)
-        self.impact_recent_label.setStyleSheet("font-size: 12px; color: #486581; background: transparent;")
-        impact_v.addWidget(self.impact_recent_label)
-
-        self.impact_cta_btn = QPushButton("Review High-Risk Cases")
-        self.impact_cta_btn.setCursor(Qt.PointingHandCursor)
-        self.impact_cta_btn.setFixedHeight(40)
-        self.impact_cta_btn.clicked.connect(lambda: self.pages.setCurrentIndex(3))
-        impact_v.addWidget(self.impact_cta_btn)
-        impact_v.addStretch(1)
-
-        sidebar_v.addWidget(impact_card, 1)
-
+        sidebar_v.addWidget(recent_card, 1)
         content_row.addWidget(sidebar, 3)
+
         layout.addLayout(content_row, 1)
+        layout.addStretch(1)
 
         return page
 
@@ -1199,11 +1284,6 @@ class EyeShieldApp(QMainWindow):
             text_muted = "#7f93a8"
             accent_blue = "#5aa9ff"
             sev_green = "#4dd4ac"
-            btn_primary_bg = "#5aa9ff"
-            btn_primary_text = "#0f1720"
-            btn_primary_hover = "#3e95f6"
-            btn_outline_color = "#7fc0ff"
-            btn_outline_hover_bg = "#213140"
             hero_grad_start = "#182738"
             hero_grad_end = "#111e2d"
         else:
@@ -1215,11 +1295,6 @@ class EyeShieldApp(QMainWindow):
             text_muted = "#7b8794"
             accent_blue = "#0f6cbd"
             sev_green = "#2d9d78"
-            btn_primary_bg = "#0f6cbd"
-            btn_primary_text = "white"
-            btn_primary_hover = "#0b5b9e"
-            btn_outline_color = "#0f6cbd"
-            btn_outline_hover_bg = "#ebf4ff"
             hero_grad_start = "#eef6ff"
             hero_grad_end = "#e4f0ff"
 
@@ -1289,21 +1364,16 @@ class EyeShieldApp(QMainWindow):
         # KPI cards
         kpi_title_style = (
             f"color: {text_secondary}; font-size: 10px; font-weight: 700;"
-            "letter-spacing: 0.9px; text-transform: uppercase; background: transparent;"
+            "letter-spacing: 0.7px; text-transform: uppercase; background: transparent;"
         )
-        kpi_value_style = f"font-size: 32px; font-weight: 700; color: {text_primary}; background: transparent;"
-        kpi_sub_style = f"font-size: 11px; color: {text_secondary}; background: transparent;"
-
-        def _pct(value):
-            return f"{(value / total) * 100:.1f}%" if total else "0.0%"
-
-        def style_kpi(obj_name, accent, value_widget, sub_widget, value_text, sub_text):
+        kpi_value_style = f"font-size: 24px; font-weight: 800; color: {text_primary}; background: transparent;"
+        def style_kpi(obj_name, accent, value_widget, value_text):
             card = self.findChild(QWidget, obj_name)
             if card:
                 card.setStyleSheet(
                     f"QWidget#{obj_name} {{ background: {card_bg};"
                     f"  border: 1px solid {card_border}; border-left: 4px solid {accent};"
-                    f"  border-radius: 12px; }}"
+                    f"  border-radius: 10px; }}"
                 )
             title_w = self.findChild(QLabel, f"{obj_name}_title")
             if title_w:
@@ -1311,13 +1381,8 @@ class EyeShieldApp(QMainWindow):
             if value_widget:
                 value_widget.setStyleSheet(kpi_value_style)
                 value_widget.setText(value_text)
-            if sub_widget:
-                sub_widget.setStyleSheet(kpi_sub_style)
-                sub_widget.setText(sub_text)
 
-        style_kpi("kpiTotal", accent_blue,
-                  self.total_screenings_value, self.total_sub,
-                  str(total), "All active screenings")
+        style_kpi("kpiTotal", accent_blue, self.total_screenings_value, str(total))
 
         no_dr_count = 0
         abnormal_count = 0
@@ -1330,33 +1395,63 @@ class EyeShieldApp(QMainWindow):
                 abnormal_count += 1
                 if level in ("Severe DR", "Proliferative DR"):
                     high_risk_count += 1
-        style_kpi("kpiPatients", sev_green,
-                  self.unique_patients_value, self.unique_patients_sub,
-                  str(no_dr_count), f"{_pct(no_dr_count)} of total")
+        style_kpi("kpiPatients", sev_green, self.unique_patients_value, str(no_dr_count))
 
-        style_kpi("kpiAbnormal", "#f59e0b",
-                  self.abnormal_cases_value, self.abnormal_cases_sub,
-                  str(abnormal_count), f"{_pct(abnormal_count)} need review")
+        style_kpi("kpiAbnormal", "#f59e0b", self.abnormal_cases_value, str(abnormal_count))
 
-        style_kpi("kpiHighRisk", "#dc3545",
-                  self.high_risk_cases_value, self.high_risk_cases_sub,
-                  str(high_risk_count), f"{_pct(high_risk_count)} urgent review")
+        style_kpi("kpiHighRisk", "#dc3545", self.high_risk_cases_value, str(high_risk_count))
+
+        # My availability card
+        availability_card = self.findChild(QWidget, "availabilityCard")
+        if availability_card:
+            availability_card.setStyleSheet(
+                f"QWidget#availabilityCard {{ background: {card_bg};"
+                f"  border: 1px solid {card_border}; border-radius: 10px; }}"
+            )
+        if hasattr(self, "_dash_availability_title_lbl"):
+            self._dash_availability_title_lbl.setStyleSheet(
+                f"color: {text_secondary}; font-size: 11px; font-weight: 800;"
+                "letter-spacing: 0.8px; text-transform: uppercase; background: transparent;"
+            )
+        if hasattr(self, "_dash_availability_hint_lbl"):
+            self._dash_availability_hint_lbl.setStyleSheet(
+                f"color: {text_muted}; font-size: 12px; font-weight: 600; background: transparent;"
+            )
+        if hasattr(self, "availability_days_label"):
+            self.availability_days_label.setStyleSheet(
+                f"font-size: 12px; font-weight: 700; color: {text_primary}; background: transparent;"
+            )
+        if hasattr(self, "availability_time_label"):
+            self.availability_time_label.setStyleSheet(
+                f"font-size: 12px; font-weight: 700; color: {text_primary}; background: transparent;"
+            )
+        if hasattr(self, "availability_updated_label"):
+            self.availability_updated_label.setStyleSheet(
+                f"font-size: 12px; color: {text_muted}; font-weight: 600; background: transparent;"
+            )
+
+        availability_days_text, availability_time_text, availability_updated_text = self._get_dashboard_availability_text()
+        if hasattr(self, "availability_days_label"):
+            self.availability_days_label.setText(f"Days: {availability_days_text}")
+        if hasattr(self, "availability_time_label"):
+            self.availability_time_label.setText(f"Hours: {availability_time_text}")
+        if hasattr(self, "availability_updated_label"):
+            self.availability_updated_label.setText(availability_updated_text)
 
         # Severity chart card
         severity_card = self.findChild(QWidget, "severityCard")
         if severity_card:
             severity_card.setStyleSheet(
-                f"QWidget#severityCard {{ background: {card_bg};"
-                f"  border: 1px solid {card_border}; border-radius: 12px; }}"
+                "QWidget#severityCard { background: transparent; border: none; }"
             )
         if hasattr(self, "_dash_severity_title_lbl"):
             self._dash_severity_title_lbl.setStyleSheet(
-                f"color: {text_secondary}; font-size: 10px; font-weight: 700;"
-                "letter-spacing: 0.9px; text-transform: uppercase; background: transparent;"
+                f"color: {text_secondary}; font-size: 11px; font-weight: 800;"
+                "letter-spacing: 0.8px; text-transform: uppercase; background: transparent;"
             )
         if hasattr(self, "_dash_severity_hint_lbl"):
             self._dash_severity_hint_lbl.setStyleSheet(
-                f"color: {text_muted}; font-size: 12px; font-weight: 500; background: transparent;"
+                f"color: {text_muted}; font-size: 12px; font-weight: 600; background: transparent;"
             )
 
         severity_counts = {level: 0 for level in getattr(self, "_severity_order", [])}
@@ -1375,59 +1470,29 @@ class EyeShieldApp(QMainWindow):
                 bar.setValue(count)
                 bar.setStyleSheet(
                     f"QProgressBar {{"
-                    f" background: {card_border};"
-                    f" border: 0; border-radius: 8px;"
+                    f" background: {'#eef2f6' if not dark else '#243241'};"
+                    f" border: 0; border-radius: 6px;"
                     f" }}"
                     f"QProgressBar::chunk {{"
                     f" background: {severity_colors[level]};"
-                    f" border-radius: 8px;"
+                    f" border-radius: 6px;"
                     f" }}"
                 )
                 count_lbl.setText(str(count))
                 count_lbl.setStyleSheet(
-                    f"font-size: 15px; font-weight: 800; color: {text_primary};"
+                    f"font-size: 14px; font-weight: 800; color: {text_primary};"
                     "background: transparent; padding-right: 4px;"
                 )
 
-        # Impact card and content
-        impact_card = self.findChild(QWidget, "impactCard")
-        if impact_card:
-            impact_card.setStyleSheet(
-                f"QWidget#impactCard {{ background: {card_bg};"
-                f"  border: 1px solid {card_border}; border-radius: 12px; }}"
+        recent_card = self.findChild(QWidget, "recentCard")
+        if recent_card:
+            recent_card.setStyleSheet(
+                "QWidget#recentCard { background: transparent; border: none; }"
             )
-        if hasattr(self, "_dash_impact_title_lbl"):
-            self._dash_impact_title_lbl.setStyleSheet(
-                f"color: {text_secondary}; font-size: 10px; font-weight: 700;"
-                "letter-spacing: 0.9px; background: transparent;"
-            )
-
-        if total == 0:
-            priority_text = "No urgent cases in the current queue"
-            summary_text = "Start a screening to generate triage insights and risk distribution."
-        elif high_risk_count > 0:
-            priority_text = f"Immediate review needed: {high_risk_count} high-risk case(s)"
-            summary_text = f"{abnormal_count} abnormal case(s) require review across {total} active screenings."
-        elif abnormal_count > 0:
-            priority_text = f"Review queue active: {abnormal_count} abnormal case(s)"
-            summary_text = "No severe/proliferative alerts right now, but moderate findings need attention."
-        else:
-            priority_text = "All current records are low risk"
-            summary_text = "No abnormal findings in the current active screening set."
-
-        if hasattr(self, "impact_priority_label"):
-            priority_bg = "#2a3948" if dark else "#eaf3ff"
-            priority_text_color = "#e8eef5" if dark else "#1d4f91"
-            self.impact_priority_label.setText(priority_text)
-            self.impact_priority_label.setStyleSheet(
-                f"font-size: 14px; font-weight: 700; color: {priority_text_color};"
-                f"background: {priority_bg}; border: 1px solid {accent_blue};"
-                "border-radius: 10px; padding: 10px 12px;"
-            )
-        if hasattr(self, "impact_summary_label"):
-            self.impact_summary_label.setText(summary_text)
-            self.impact_summary_label.setStyleSheet(
-                f"font-size: 12px; color: {text_secondary}; background: transparent;"
+        if hasattr(self, "_dash_recent_title_lbl"):
+            self._dash_recent_title_lbl.setStyleSheet(
+                f"color: {text_secondary}; font-size: 11px; font-weight: 800;"
+                "letter-spacing: 0.8px; text-transform: uppercase; background: transparent;"
             )
 
         metric_defs = {
@@ -1464,25 +1529,65 @@ class EyeShieldApp(QMainWindow):
                     f"font-size: 11px; color: {text_muted}; font-weight: 600; background: transparent;"
                 )
 
-        if hasattr(self, "impact_recent_label"):
-            if rows:
-                latest_name = rows[0][1] or "Unknown"
-                latest_result = self._normalize_severity_label(rows[0][2]) or "Pending"
-                self.impact_recent_label.setText(f"Latest record: {latest_name} - {latest_result}")
-            else:
-                self.impact_recent_label.setText("Latest record: none")
-            self.impact_recent_label.setStyleSheet(
-                f"font-size: 12px; color: {text_secondary}; background: transparent;"
-            )
+        # Populate Recent Screenings list
+        if hasattr(self, "recent_list_layout"):
+            # Clear old items
+            while self.recent_list_layout.count():
+                item = self.recent_list_layout.takeAt(0)
+                if w := item.widget():
+                    w.deleteLater()
 
-        if hasattr(self, "impact_cta_btn"):
-            self.impact_cta_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {btn_primary_bg}; color: {btn_primary_text}; border: none;
-                    border-radius: 10px; font-size: 13px; font-weight: 700; padding: 0 16px;
-                }}
-                QPushButton:hover {{ background: {btn_primary_hover}; }}
-            """)
+            if not rows:
+                empty_lbl = QLabel("No screenings available.")
+                empty_lbl.setStyleSheet(
+                    f"font-size: 12px; color: {text_muted}; font-weight: 600; background: transparent; padding: 8px 0;"
+                )
+                self.recent_list_layout.addWidget(empty_lbl)
+            else:
+                for row_data in rows[:4]:
+                    patient_id = row_data[0]
+                    name = row_data[1] or "Unknown"
+                    result = self._normalize_severity_label(row_data[2]) or "Pending"
+                    
+                    item_w = QWidget()
+                    item_v = QVBoxLayout(item_w)
+                    item_v.setContentsMargins(0, 4, 0, 4)
+                    item_v.setSpacing(4)
+                    
+                    name_lbl = QLabel(name)
+                    name_lbl.setStyleSheet(
+                        f"font-size: 13px; font-weight: 700; color: {text_primary}; background: transparent;"
+                    )
+                    
+                    sub_row = QHBoxLayout()
+                    sub_row.setContentsMargins(0, 0, 0, 0)
+                    sub_row.setSpacing(8)
+                    
+                    id_lbl = QLabel(patient_id)
+                    id_lbl.setStyleSheet(
+                        f"font-size: 12px; font-weight: 600; color: {text_muted}; background: transparent;"
+                    )
+                    
+                    res_lbl = QLabel(result)
+                    res_color = severity_colors.get(result, text_secondary)
+                    res_lbl.setStyleSheet(
+                        f"font-size: 12px; font-weight: 700; color: {res_color}; background: transparent;"
+                    )
+                    
+                    sub_row.addWidget(id_lbl)
+                    sub_row.addStretch()
+                    sub_row.addWidget(res_lbl)
+                    
+                    item_v.addWidget(name_lbl)
+                    item_v.addLayout(sub_row)
+                    
+                    self.recent_list_layout.addWidget(item_w)
+                    
+                    line = QWidget()
+                    line.setFixedHeight(1)
+                    line.setStyleSheet(f"background: {card_border};")
+                    self.recent_list_layout.addWidget(line)
+
 
     @staticmethod
     def _normalize_severity_label(result_text):
@@ -1517,6 +1622,67 @@ class EyeShieldApp(QMainWindow):
             return float(numeric)
         except ValueError:
             return None
+
+    def _get_dashboard_availability_text(self):
+        profile = get_user_profile(self.username) or {}
+        raw_availability = profile.get("availability_json")
+        if not raw_availability:
+            return "Not set", "Not set", "Update this from Users > Edit Availability"
+
+        try:
+            payload = json.loads(raw_availability) if isinstance(raw_availability, str) else raw_availability
+        except Exception:
+            payload = {}
+
+        if not isinstance(payload, dict):
+            return "Not set", "Not set", "Update this from Users > Edit Availability"
+
+        start_time = str(payload.get("start_time") or "").strip()
+        end_time = str(payload.get("end_time") or "").strip()
+        time_text = "Not set"
+        if start_time and end_time:
+            formatted_start = self._format_availability_time(start_time)
+            formatted_end = self._format_availability_time(end_time)
+            time_text = f"{formatted_start} - {formatted_end}"
+
+        selected_days = payload.get("days") or []
+        weekday_order = [
+            ("mon", "Mon"),
+            ("tue", "Tue"),
+            ("wed", "Wed"),
+            ("thu", "Thu"),
+            ("fri", "Fri"),
+            ("sat", "Sat"),
+            ("sun", "Sun"),
+        ]
+        day_text = "Not set"
+        if isinstance(selected_days, list) and selected_days:
+            selected_set = {str(value).strip().lower() for value in selected_days}
+            ordered_days = [label for key, label in weekday_order if key in selected_set]
+            if ordered_days:
+                day_text = ", ".join(ordered_days)
+
+        updated_at = str(payload.get("updated_at") or "").strip()
+        updated_text = "Update this from Users > Edit Availability"
+        if updated_at:
+            with contextlib.suppress(Exception):
+                parsed_updated_at = datetime.fromisoformat(updated_at)
+                updated_text = f"Last updated: {parsed_updated_at.strftime('%b %d, %Y %I:%M %p')}"
+
+        return day_text, time_text, updated_text
+
+    @staticmethod
+    def _format_availability_time(value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        for candidate, fmt in (
+            (text.upper(), "%I:%M %p"),
+            (text, "%H:%M"),
+        ):
+            with contextlib.suppress(ValueError):
+                return datetime.strptime(candidate, fmt).strftime("%I:%M %p").lstrip("0")
+        return text
 
     @staticmethod
     def get_nav_button_style(icon_only=False):
