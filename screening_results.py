@@ -134,7 +134,7 @@ class ResultsWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent_page = parent
-        self.setMinimumSize(1080, 760)
+        self.setMinimumSize(900, 600)
         self._icons_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 
         # Report generation state — updated by set_results()

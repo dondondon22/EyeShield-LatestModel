@@ -1,4 +1,4 @@
-﻿"""
+"""
 Users management module for EyeShield EMR application.
 Provides a GUI for creating, listing, updating and deleting users.
 """
@@ -567,7 +567,7 @@ class NewUserDialog(QDialog):
             if hasattr(parent, "refresh_users"):
                 parent.refresh_users()
             if hasattr(parent, "log_activity"):
-                parent.log_activity(username, f"Created as {role}")
+                parent.log_activity(username, f"Account Created ({role})")
             if hasattr(parent, "_set_status"):
                 parent._set_status(f"User '{username}' created successfully")
             if hasattr(parent, "show_notification"):
@@ -976,15 +976,19 @@ class UsersPage(QWidget):
         log_hdr.addStretch()
         log_vbox.addLayout(log_hdr)
 
-        self.activity_log = QTableWidget(0, 2)
+        self.activity_log = QTableWidget(0, 3)
         self.activity_log.setObjectName("usrActivityTable")
-        self.activity_log.setHorizontalHeaderLabels(["Username", "Date-Time"])
+        self.activity_log.setHorizontalHeaderLabels(["Username", "Action", "Date-Time"])
         self.activity_log.setSelectionMode(QAbstractItemView.NoSelection)
         self.activity_log.setEditTriggers(QTableWidget.NoEditTriggers)
         self.activity_log.verticalHeader().setVisible(False)
         self.activity_log.setShowGrid(False)
+        self.activity_log.horizontalHeader().setStretchLastSection(False)
         self.activity_log.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.activity_log.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.activity_log.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
+        self.activity_log.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
+        self.activity_log.setColumnWidth(1, 190)
+        self.activity_log.setColumnWidth(2, 165)
         self.activity_log.setMinimumHeight(175)
         self.activity_log.setSortingEnabled(True)
         log_vbox.addWidget(self.activity_log)
@@ -1117,7 +1121,9 @@ class UsersPage(QWidget):
             return
 
         self._set_status(f"Availability updated for '{username}'")
-        self.log_activity(username, "Availability updated")
+        self.log_activity(username, "Availability Updated")
+        if hasattr(self, "show_notification"):
+            self.show_notification(f"Schedule updated for {username}.")
         self.refresh_users()
 
     def _actor_context(self):
@@ -1319,7 +1325,7 @@ class UsersPage(QWidget):
         success = user_store.delete_user(username, acting_username=current_username, acting_role=current_role)
         if success:
             self._set_status(f"User '{username}' deleted")
-            self.log_activity(username, "Deleted")
+            self.log_activity(username, "Account Deleted")
             self.refresh_users()
             QMessageBox.information(self, "User Deleted", f"User '{username}' was successfully deleted.")
         else:
@@ -1371,7 +1377,7 @@ class UsersPage(QWidget):
         )
         if success:
             self._set_status(f"Role updated: {username} \u2192 {new_role}")
-            self.log_activity(username, f"Role changed to {new_role}")
+            self.log_activity(username, f"Role Changed ({new_role})")
             self.refresh_users()
             QMessageBox.information(
                 self, "Role Updated",
@@ -1418,7 +1424,7 @@ class UsersPage(QWidget):
         )
         if success:
             self._set_status(f"Password reset for '{username}'")
-            self.log_activity(username, "Password reset")
+            self.log_activity(username, "Password Reset")
             QMessageBox.information(
                 self, "Password Reset",
                 f"Password for '{username}' was successfully reset.",
@@ -1432,6 +1438,32 @@ class UsersPage(QWidget):
         user_store.log_activity(user, action, timestamp)
         self.load_activity_log()
 
+    @staticmethod
+    def _format_activity_action(action: str) -> str:
+        text = str(action or "").strip()
+        if not text:
+            return "Unknown"
+        lowered = text.lower()
+        if lowered == "login":
+            return "Login"
+        if lowered == "logout":
+            return "Logout"
+        if lowered == "deleted":
+            return "Account Deleted"
+        if lowered == "password reset":
+            return "Password Reset"
+        if lowered == "availability updated":
+            return "Availability Updated"
+        if lowered == "profile updated":
+            return "Profile Updated"
+        if lowered.startswith("created as "):
+            role = text[11:].strip()
+            return f"Account Created ({role})" if role else "Account Created"
+        if lowered.startswith("role changed to "):
+            role = text[16:].strip()
+            return f"Role Changed ({role})" if role else "Role Changed"
+        return text
+
     def load_activity_log(self):
         entries = user_store.get_recent_activity(limit=120)
         self.activity_log.setSortingEnabled(False)
@@ -1441,19 +1473,23 @@ class UsersPage(QWidget):
             self.activity_log.insertRow(row)
 
             username = str(entry.get("username") or "").strip()
+            action = self._format_activity_action(entry.get("action"))
             timestamp = str(entry.get("time") or "").strip()
 
             username_item = QTableWidgetItem(username)
+            action_item = QTableWidgetItem(action)
             time_item = QTableWidgetItem(timestamp)
 
             username_item.setFlags(username_item.flags() & ~Qt.ItemIsEditable)
+            action_item.setFlags(action_item.flags() & ~Qt.ItemIsEditable)
             time_item.setFlags(time_item.flags() & ~Qt.ItemIsEditable)
 
             self.activity_log.setItem(row, 0, username_item)
-            self.activity_log.setItem(row, 1, time_item)
+            self.activity_log.setItem(row, 1, action_item)
+            self.activity_log.setItem(row, 2, time_item)
 
         self.activity_log.setSortingEnabled(True)
-        self.activity_log.sortItems(1, Qt.DescendingOrder)
+        self.activity_log.sortItems(2, Qt.DescendingOrder)
 
     def apply_language(self, language: str):
         from translations import get_pack

@@ -74,7 +74,7 @@ class ContactAdminDialog(QDialog):
             }
         """)
 
-        subtitle = QLabel("Reach out to request an account or reset access.")
+        subtitle = QLabel("Use the details below to request an account or reset access.")
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet("""
             QLabel {

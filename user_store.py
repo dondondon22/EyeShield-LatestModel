@@ -150,6 +150,13 @@ class UserStore:
             new_password=new_password,
         )
 
+    @classmethod
+    def update_own_availability(cls, current_username, availability_json):
+        return AuthUserManager.update_own_availability(
+            current_username=current_username,
+            availability_json=availability_json,
+        )
+
 # For backward compatibility with existing code
 load_users = UserStore.load_users
 save_users = UserStore.save_users
@@ -162,3 +169,4 @@ update_user_availability = UserStore.update_user_availability
 log_activity = UserStore.log_activity
 get_recent_activity = UserStore.get_recent_activity
 update_own_account = UserStore.update_own_account
+update_own_availability = UserStore.update_own_availability

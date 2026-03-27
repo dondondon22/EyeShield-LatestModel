@@ -757,6 +757,31 @@ class UserManager:
         return success
 
     @staticmethod
+    def update_own_availability(current_username: str, availability_json: str) -> tuple[bool, str]:
+        username = str(current_username or "").strip()
+        if not username:
+            return False, "User not found."
+
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE users SET availability_json = ? WHERE username = ?",
+                (str(availability_json or ""), username),
+            )
+            conn.commit()
+            success = cur.rowcount > 0
+        except sqlite3.Error:
+            success = False
+        conn.close()
+
+        if not success:
+            return False, "Could not update your schedule."
+
+        UserManager.add_activity_log(username, "Availability Updated")
+        return True, "Schedule updated successfully."
+
+    @staticmethod
     def update_own_account(
         current_username: str,
         current_password: str,
