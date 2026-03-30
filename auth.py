@@ -132,6 +132,8 @@ class UserManager:
         "archived_at": "TEXT",
         "archived_by": "TEXT",
         "archive_reason": "TEXT",
+        "original_screener_username": "TEXT",
+        "original_screener_name": "TEXT",
         "screened_at": "TEXT",
         "source_image_path": "TEXT",
         "heatmap_image_path": "TEXT",
@@ -221,6 +223,24 @@ class UserManager:
                 username TEXT NOT NULL,
                 action TEXT NOT NULL,
                 action_time TEXT NOT NULL
+            )
+            """
+        )
+
+        # Referral assignments table
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS referral_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                referral_id TEXT UNIQUE NOT NULL,
+                assigned_to_username TEXT NOT NULL,
+                assigned_by_username TEXT NOT NULL,
+                assigned_at TEXT,
+                status TEXT DEFAULT 'pending',
+                patient_name TEXT,
+                urgency TEXT DEFAULT 'normal',
+                notes TEXT,
+                FOREIGN KEY (assigned_to_username) REFERENCES users(username)
             )
             """
         )
@@ -1136,5 +1156,175 @@ class UserManager:
         rows = cur.fetchall()
         conn.close()
         return rows
+
+    @staticmethod
+    def assign_referral(
+        referral_id: str,
+        assigned_to_username: str,
+        assigned_by_username: str,
+        patient_name: str = "",
+        urgency: str = "normal",
+        notes: str = "",
+    ) -> bool:
+        """Assign a referral to a specific clinician"""
+        if not referral_id or not assigned_to_username or not assigned_by_username:
+            return False
+
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            assigned_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cur.execute(
+                """
+                INSERT INTO referral_assignments 
+                (referral_id, assigned_to_username, assigned_by_username, assigned_at, patient_name, urgency, notes, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+                """,
+                (referral_id, assigned_to_username, assigned_by_username, assigned_at, patient_name, urgency, notes),
+            )
+            conn.commit()
+            success = cur.rowcount > 0
+        except sqlite3.IntegrityError:
+            # Referral already assigned
+            conn.close()
+            return False
+        except sqlite3.Error:
+            success = False
+        
+        conn.close()
+        if success:
+            UserManager.add_activity_log(assigned_by_username, f"Assigned referral {referral_id} to {assigned_to_username}")
+        return success
+
+    @staticmethod
+    def get_pending_referrals(username: str) -> list[dict]:
+        """Get all pending referrals assigned to a clinician"""
+        if not username:
+            return []
+
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, referral_id, assigned_by_username, assigned_at, patient_name, urgency, notes, status
+            FROM referral_assignments
+            WHERE assigned_to_username = ? AND status IN ('pending', 'viewed')
+            ORDER BY urgency DESC, assigned_at DESC
+            """,
+            (username,),
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        return [
+            {
+                "id": row[0],
+                "referral_id": row[1],
+                "assigned_by": row[2],
+                "assigned_at": row[3],
+                "patient_name": row[4],
+                "urgency": row[5],
+                "notes": row[6],
+                "status": row[7],
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def get_user_referrals(username: str, limit: int = 100) -> list[dict]:
+        """Get referral activity that is private to a user (created by or assigned to)."""
+        user = str(username or "").strip()
+        if not user:
+            return []
+
+        safe_limit = max(1, min(int(limit), 500))
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                id,
+                referral_id,
+                assigned_to_username,
+                assigned_by_username,
+                assigned_at,
+                patient_name,
+                urgency,
+                notes,
+                status
+            FROM referral_assignments
+            WHERE assigned_to_username = ? OR assigned_by_username = ?
+            ORDER BY assigned_at DESC
+            LIMIT ?
+            """,
+            (user, user, safe_limit),
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        result = []
+        for row in rows:
+            assigned_to = row[2]
+            assigned_by = row[3]
+            relation = "assigned_to_me" if assigned_to == user else "created_by_me"
+            result.append(
+                {
+                    "id": row[0],
+                    "referral_id": row[1],
+                    "assigned_to": assigned_to,
+                    "assigned_by": assigned_by,
+                    "assigned_at": row[4],
+                    "patient_name": row[5],
+                    "urgency": row[6],
+                    "notes": row[7],
+                    "status": row[8],
+                    "relation": relation,
+                }
+            )
+        return result
+
+    @staticmethod
+    def get_referral_count(username: str, status: str = "pending") -> int:
+        """Get count of pending referrals for a clinician"""
+        if not username:
+            return 0
+
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM referral_assignments
+            WHERE assigned_to_username = ? AND status = ?
+            """,
+            (username, status),
+        )
+        count = cur.fetchone()[0]
+        conn.close()
+        return count
+
+    @staticmethod
+    def update_referral_status(referral_id: str, new_status: str) -> bool:
+        """Update referral status (pending, viewed, completed, archived)"""
+        if not referral_id or new_status not in ("pending", "viewed", "completed", "archived"):
+            return False
+
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                UPDATE referral_assignments
+                SET status = ?
+                WHERE referral_id = ?
+                """,
+                (new_status, referral_id),
+            )
+            conn.commit()
+            success = cur.rowcount > 0
+        except sqlite3.Error:
+            success = False
+
+        conn.close()
+        return success
 
 

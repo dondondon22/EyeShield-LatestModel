@@ -715,9 +715,8 @@ class SettingsPage(QWidget):
         layout.addWidget(pref_group)
         layout.addWidget(self.session_group)
         layout.addWidget(self.admin_contact_group)
-        layout.addWidget(self.referral_hospitals_group)
 
-        # ── Action buttons (right after preferences) ──────────────────────
+        # Global settings actions are shown before referral hospital management.
         button_row = QHBoxLayout()
         button_row.addStretch(1)
         self.reset_btn = QPushButton("Reset Defaults")
@@ -730,6 +729,8 @@ class SettingsPage(QWidget):
         button_row.addWidget(self.reset_btn)
         button_row.addWidget(self.save_btn)
         layout.addLayout(button_row)
+
+        layout.addWidget(self.referral_hospitals_group)
 
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("statusLabel")

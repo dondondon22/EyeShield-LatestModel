@@ -966,7 +966,7 @@ class UsersPage(QWidget):
         log_hdr.setContentsMargins(2, 0, 2, 2)
         log_title = QLabel("Activity Log")
         log_title.setObjectName("usrSectionTitle")
-        log_hint = QLabel("Latest admin and account events")
+        log_hint = QLabel("Latest admin, account, and clinical audit events")
         log_hint.setObjectName("usrSectionHint")
         log_hdr_col = QVBoxLayout()
         log_hdr_col.setSpacing(0)
@@ -1462,10 +1462,18 @@ class UsersPage(QWidget):
         if lowered.startswith("role changed to "):
             role = text[16:].strip()
             return f"Role Changed ({role})" if role else "Role Changed"
+        if lowered.startswith("report_generated"):
+            return "Report PDF Generated"
+        if lowered.startswith("referral_generated"):
+            return "Referral PDF Generated"
+        if lowered.startswith("rescreen_allowed"):
+            return "Rescreen Allowed"
+        if lowered.startswith("rescreen_blocked"):
+            return "Rescreen Blocked"
         return text
 
     def load_activity_log(self):
-        entries = user_store.get_recent_activity(limit=120)
+        entries = user_store.get_recent_activity(limit=300)
         self.activity_log.setSortingEnabled(False)
         self.activity_log.setRowCount(0)
         for entry in entries:

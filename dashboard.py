@@ -14,9 +14,9 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QStackedWidget, QGroupBox, QMessageBox, QProgressBar, QSizePolicy,
-    QFrame
+    QFrame, QMenu
 )
-from PySide6.QtCore import Qt, QSize, QByteArray, QEvent, QTimer
+from PySide6.QtCore import Qt, QSize, QByteArray, QEvent, QTimer, QCoreApplication
 from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont, QShortcut, QKeySequence, QColor, QGuiApplication
 from PySide6.QtSvg import QSvgRenderer
 
@@ -26,7 +26,7 @@ from users import UsersPage
 from settings import SettingsPage, DARK_STYLESHEET
 from help_support import HelpSupportPage
 from camera import CameraPage
-from auth import DB_FILE
+from auth import DB_FILE, UserManager
 from user_auth import get_user_profile
 
 
@@ -34,8 +34,8 @@ class EyeShieldApp(QMainWindow):
     """Main application window"""
 
     ROLE_PAGE_ACCESS = {
-        "admin": {4, 5, 6},
-        "clinician": {0, 1, 2, 3, 5, 6},
+        "admin": {4, 5, 6, 7},
+        "clinician": {0, 1, 2, 3, 5, 6, 7},
     }
 
     def __init__(self, username, role, display_name=None, full_name=None, specialization=None, contact=None):
@@ -205,6 +205,16 @@ class EyeShieldApp(QMainWindow):
                 "requires_admin": True,
             },
             {
+                "icon": self._resolve_existing_path(
+                    os.path.join(icons_dir, "refferal_assignments.svg"),
+                    os.path.join(icons_dir, "referral_assignments.svg"),
+                    os.path.join(icons_dir, "referral.svg"),
+                ),
+                "label": "Referrals",
+                "page_index": 7,
+                "requires_admin": False,
+            },
+            {
                 "icon": self._resolve_existing_path(os.path.join(icons_dir, "settings.svg")),
                 "label": "Settings",
                 "page_index": 5,
@@ -243,17 +253,6 @@ class EyeShieldApp(QMainWindow):
         self.nav_labels = nav_labels
         self.nav_widgets = nav_widgets
         self._nav_label_originals = nav_label_originals
-
-        # User info on the right — styled as a pill badge
-        user_info = QLabel(f"  {self.display_name}  \u2022  {self.display_title}  ")
-        self.user_info_label = user_info
-        user_info.setObjectName("userInfo")
-        user_info.setStyleSheet(
-            "color: #007bff; background: #e8f0fe; border: 1px solid #b8d0f7;"
-            "border-radius: 12px; font-size: 12px; font-weight: 600;"
-            "padding: 2px 8px; margin-left: 12px; margin-right: 8px;"
-        )
-        nav_layout.addWidget(user_info)
 
         logout_btn = QPushButton("")
         self.logout_btn = logout_btn
@@ -309,6 +308,7 @@ class EyeShieldApp(QMainWindow):
         self.users_page = UsersPage()
         self.settings_page = SettingsPage()
         self.help_support_page = HelpSupportPage()
+        self.referrals_page = self.create_referrals_page()
 
         # Dashboard is created after the other pages so it can be refreshed
         self.dashboard_page = self.create_dashboard_page()
@@ -322,6 +322,7 @@ class EyeShieldApp(QMainWindow):
         self.pages.addWidget(self.users_page)
         self.pages.addWidget(self.settings_page)
         self.pages.addWidget(self.help_support_page)
+        self.pages.addWidget(self.referrals_page)
         self.pages.currentChanged.connect(self._on_page_changed)
 
         main_layout.addWidget(self.pages)
@@ -352,6 +353,28 @@ class EyeShieldApp(QMainWindow):
 
         self._setup_inactivity_timeout()
         self._setup_dashboard_clock()
+
+        # Check for pending referrals and show notification if clinician
+        if self.role == "clinician":
+            QTimer.singleShot(500, self._show_pending_referrals_notification)
+
+    def _show_pending_referrals_notification(self):
+        """Show notification dialog if clinician has pending referrals"""
+        referrals = UserManager.get_pending_referrals(self.username)
+        if referrals:
+            try:
+                from login import PendingReferralsDialog
+            except ImportError:
+                from .login import PendingReferralsDialog
+            
+            dialog = PendingReferralsDialog(self.username, referrals, self)
+            result = dialog.exec()
+            if result == 1:  # Accept button clicked
+                # Mark all pending referrals as viewed
+                for referral in referrals:
+                    UserManager.update_referral_status(referral["referral_id"], "viewed")
+                if getattr(dialog, "go_to_referrals", False):
+                    self._navigate_to(7)
 
     @classmethod
     def _allowed_pages_for_role(cls, role: str) -> set[int]:
@@ -672,6 +695,8 @@ class EyeShieldApp(QMainWindow):
             self.reports_page.refresh_report()
         if index == 0:
             self.refresh_dashboard()
+        if index == 7:
+            self.refresh_referrals_page()
 
     def _set_active_nav(self, index: int):
         """Highlight the active navigation button and dim the rest."""
@@ -896,6 +921,7 @@ class EyeShieldApp(QMainWindow):
             "Users": "nav_users",
             "Settings": "nav_settings",
             "Help": "nav_help",
+            "Referrals": "Referrals",
         }
         if hasattr(self, "nav_labels") and hasattr(self, "_nav_label_originals"):
             for label, orig in zip(self.nav_labels, self._nav_label_originals):
@@ -1354,9 +1380,256 @@ class EyeShieldApp(QMainWindow):
 
         return page
 
+    def create_referrals_page(self):
+        """Create the private referrals page for each signed-in user."""
+        page = QWidget()
+        page.setObjectName("referralsPage")
+        page.setStyleSheet("QWidget#referralsPage { background: #f8f9fa; }")
+
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+
+        title = QLabel("REFERRALS")
+        title.setStyleSheet("color: #2b3a4a; font-size: 22px; font-weight: 800; background: transparent;")
+        layout.addWidget(title)
+
+        subtitle = QLabel("Private referral activity for your account only.")
+        subtitle.setStyleSheet("color: #64748b; font-size: 12px; font-weight: 600; background: transparent;")
+        layout.addWidget(subtitle)
+
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(12)
+
+        assigned_card = QWidget()
+        assigned_card.setObjectName("refAssignedCard")
+        assigned_card.setStyleSheet(
+            "QWidget#refAssignedCard {"
+            "background: white; border: 1px solid #dbe3ee; border-radius: 10px;"
+            "}"
+        )
+        assigned_v = QVBoxLayout(assigned_card)
+        assigned_v.setContentsMargins(14, 10, 14, 10)
+        assigned_v.setSpacing(4)
+        assigned_title = QLabel("ASSIGNED TO ME")
+        assigned_title.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 800; background: transparent;")
+        self.ref_assigned_to_me_value = QLabel("0")
+        self.ref_assigned_to_me_value.setStyleSheet("color: #1f2937; font-size: 24px; font-weight: 800; background: transparent;")
+        assigned_v.addWidget(assigned_title)
+        assigned_v.addWidget(self.ref_assigned_to_me_value)
+
+        created_card = QWidget()
+        created_card.setObjectName("refCreatedCard")
+        created_card.setStyleSheet(
+            "QWidget#refCreatedCard {"
+            "background: white; border: 1px solid #dbe3ee; border-radius: 10px;"
+            "}"
+        )
+        created_v = QVBoxLayout(created_card)
+        created_v.setContentsMargins(14, 10, 14, 10)
+        created_v.setSpacing(4)
+        created_title = QLabel("CREATED BY ME")
+        created_title.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 800; background: transparent;")
+        self.ref_created_by_me_value = QLabel("0")
+        self.ref_created_by_me_value.setStyleSheet("color: #1f2937; font-size: 24px; font-weight: 800; background: transparent;")
+        created_v.addWidget(created_title)
+        created_v.addWidget(self.ref_created_by_me_value)
+
+        stats_row.addWidget(assigned_card, 1)
+        stats_row.addWidget(created_card, 1)
+        layout.addLayout(stats_row)
+
+        feed_card = QWidget()
+        feed_card.setObjectName("refFeedCard")
+        feed_card.setStyleSheet(
+            "QWidget#refFeedCard {"
+            "background: white; border: 1px solid #dbe3ee; border-radius: 10px;"
+            "}"
+        )
+        feed_v = QVBoxLayout(feed_card)
+        feed_v.setContentsMargins(14, 12, 14, 12)
+        feed_v.setSpacing(8)
+
+        feed_title = QLabel("RECENT REFERRAL ACTIVITY")
+        feed_title.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 800; background: transparent;")
+        feed_v.addWidget(feed_title)
+
+        self.referrals_feed_layout = QVBoxLayout()
+        self.referrals_feed_layout.setContentsMargins(0, 0, 0, 0)
+        self.referrals_feed_layout.setSpacing(6)
+        feed_v.addLayout(self.referrals_feed_layout)
+        feed_v.addStretch(1)
+
+        layout.addWidget(feed_card, 1)
+        return page
+
+    def refresh_referrals_page(self):
+        """Refresh referral activity page with private user data."""
+        if not hasattr(self, "referrals_feed_layout"):
+            return
+
+        while self.referrals_feed_layout.count():
+            item = self.referrals_feed_layout.takeAt(0)
+            if w := item.widget():
+                w.deleteLater()
+
+        referrals = UserManager.get_user_referrals(self.username, limit=200)
+        assigned_to_me_count = sum(1 for item in referrals if item.get("relation") == "assigned_to_me")
+        created_by_me_count = sum(1 for item in referrals if item.get("relation") == "created_by_me")
+
+        if hasattr(self, "ref_assigned_to_me_value"):
+            self.ref_assigned_to_me_value.setText(str(assigned_to_me_count))
+        if hasattr(self, "ref_created_by_me_value"):
+            self.ref_created_by_me_value.setText(str(created_by_me_count))
+
+        if not referrals:
+            empty_lbl = QLabel("No referral activity for your account yet.")
+            empty_lbl.setStyleSheet(
+                "font-size: 12px; color: #64748b; font-weight: 600; background: transparent; padding: 6px 0;"
+            )
+            self.referrals_feed_layout.addWidget(empty_lbl)
+            return
+
+        for referral in referrals[:12]:
+            relation = referral.get("relation")
+            relation_text = "Assigned to me" if relation == "assigned_to_me" else "Created by me"
+            relation_color = "#0e6fcd" if relation == "assigned_to_me" else "#2e7d32"
+            patient_name = str(referral.get("patient_name") or "Unknown Patient").strip() or "Unknown Patient"
+            urgency = str(referral.get("urgency") or "normal").capitalize()
+            status = str(referral.get("status") or "pending").capitalize()
+            assigned_at = str(referral.get("assigned_at") or "").strip()
+            assigned_by = str(referral.get("assigned_by") or "").strip()
+            assigned_to = str(referral.get("assigned_to") or "").strip()
+
+            row = QWidget()
+            row.setStyleSheet(
+                "QWidget {"
+                "background: #f8fbff;"
+                "border: 1px solid #e5edf7;"
+                "border-radius: 8px;"
+                "}"
+            )
+            row.setCursor(Qt.PointingHandCursor)
+            row.setProperty("patient_name", patient_name)
+            row.mouseDoubleClickEvent = lambda event, pname=patient_name: self._show_referral_details(pname)
+            row.setContextMenuPolicy(Qt.CustomContextMenu)
+            row.customContextMenuRequested.connect(
+                lambda pos, row_widget=row, pname=patient_name: self._show_referral_context_menu(row_widget, pname, pos)
+            )
+            row_v = QVBoxLayout(row)
+            row_v.setContentsMargins(10, 8, 10, 8)
+            row_v.setSpacing(2)
+
+            top = QLabel(f"{patient_name} • {urgency} • {status}")
+            top.setStyleSheet("font-size: 12px; font-weight: 700; color: #1f2937; background: transparent;")
+            top.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            row_v.addWidget(top)
+
+            byline = QLabel(f"{relation_text} | {assigned_by} -> {assigned_to}")
+            byline.setStyleSheet(
+                f"font-size: 11px; font-weight: 700; color: {relation_color}; background: transparent;"
+            )
+            byline.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            row_v.addWidget(byline)
+
+            if assigned_at:
+                date_lbl = QLabel(assigned_at)
+                date_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #64748b; background: transparent;")
+                date_lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                row_v.addWidget(date_lbl)
+
+            self.referrals_feed_layout.addWidget(row)
+
+    def _show_referral_context_menu(self, row_widget: QWidget, patient_name: str, local_pos):
+        menu = QMenu(self)
+        action = menu.addAction("View Details")
+        chosen = menu.exec(row_widget.mapToGlobal(local_pos))
+        if chosen == action:
+            self._show_referral_details(patient_name)
+
+    def _show_referral_details(self, patient_name: str):
+        """Fetch patient record by name and display referral details with fundus image."""
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, patient_id, name, birthdate, age, sex, contact, eyes,
+                       diabetes_type, duration, hba1c, prev_treatment, notes,
+                       result, confidence, screened_at, archived_at, archived_by,
+                       archive_reason, original_screener_username, original_screener_name,
+                       height, weight, bmi, visual_acuity_left, visual_acuity_right,
+                       blood_pressure_systolic, blood_pressure_diastolic,
+                       fasting_blood_sugar, random_blood_sugar,
+                       diabetes_diagnosis_date, treatment_regimen, prev_dr_stage,
+                       symptom_blurred_vision, symptom_floaters, symptom_flashes,
+                       symptom_vision_loss, source_image_path
+                FROM patient_records
+                WHERE name = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (patient_name,),
+            )
+            row = cur.fetchone()
+            conn.close()
+
+            if not row:
+                QMessageBox.warning(self, "Patient Not Found", f"Could not find patient record for {patient_name}")
+                return
+
+            record = {
+                "id": row[0],
+                "patient_id": row[1],
+                "name": row[2],
+                "birthdate": row[3],
+                "age": row[4],
+                "sex": row[5],
+                "contact": row[6],
+                "eyes": row[7],
+                "diabetes_type": row[8],
+                "duration": row[9],
+                "hba1c": row[10],
+                "prev_treatment": row[11],
+                "notes": row[12],
+                "result": row[13],
+                "confidence": row[14],
+                "screened_at": row[15],
+                "archived_at": row[16],
+                "archived_by": row[17],
+                "archive_reason": row[18],
+                "original_screener_username": row[19],
+                "original_screener_name": row[20],
+                "height": row[21],
+                "weight": row[22],
+                "bmi": row[23],
+                "visual_acuity_left": row[24],
+                "visual_acuity_right": row[25],
+                "blood_pressure_systolic": row[26],
+                "blood_pressure_diastolic": row[27],
+                "fasting_blood_sugar": row[28],
+                "random_blood_sugar": row[29],
+                "diabetes_diagnosis_date": row[30],
+                "treatment_regimen": row[31],
+                "prev_dr_stage": row[32],
+                "symptom_blurred_vision": row[33],
+                "symptom_floaters": row[34],
+                "symptom_flashes": row[35],
+                "symptom_vision_loss": row[36],
+                "source_image_path": row[37],
+            }
+
+            from reports import ReferralDetailDialog
+
+            dialog = ReferralDetailDialog(record, self)
+            dialog.exec()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to load referral details: {str(e)}")
+
     def refresh_dashboard(self):
         """Refresh all dashboard widgets with current data and correct theme colors."""
         from translations import get_pack
+
         _lang = getattr(self, "_current_language", "English")
         get_pack(_lang)
         dark = getattr(self, "_dark_mode", False)
@@ -1406,6 +1679,7 @@ class EyeShieldApp(QMainWindow):
             rows = cur.fetchall()
             conn.close()
         total = len(rows)
+
         # Page background
         if hasattr(self, "dashboard_page"):
             self.dashboard_page.setStyleSheet(
@@ -1453,6 +1727,7 @@ class EyeShieldApp(QMainWindow):
             "letter-spacing: 0.7px; text-transform: uppercase; background: transparent;"
         )
         kpi_value_style = f"font-size: 24px; font-weight: 800; color: {text_primary}; background: transparent;"
+
         def style_kpi(obj_name, accent, value_widget, value_text):
             card = self.findChild(QWidget, obj_name)
             if card:
@@ -1481,10 +1756,9 @@ class EyeShieldApp(QMainWindow):
                 abnormal_count += 1
                 if level in ("Severe DR", "Proliferative DR"):
                     high_risk_count += 1
+
         style_kpi("kpiPatients", sev_green, self.unique_patients_value, str(no_dr_count))
-
         style_kpi("kpiAbnormal", "#f59e0b", self.abnormal_cases_value, str(abnormal_count))
-
         style_kpi("kpiHighRisk", "#dc3545", self.high_risk_cases_value, str(high_risk_count))
 
         # My availability card
@@ -1675,7 +1949,6 @@ class EyeShieldApp(QMainWindow):
                     item_v.addLayout(sub_row)
                     
                     self.recent_list_layout.addWidget(item_w)
-
 
     @staticmethod
     def _normalize_severity_label(result_text):

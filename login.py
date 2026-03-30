@@ -5,15 +5,18 @@ import json
 
 from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QLineEdit,
-    QVBoxLayout, QHBoxLayout, QCheckBox, QMessageBox, QDialog, QFrame
+    QVBoxLayout, QHBoxLayout, QCheckBox, QMessageBox, QDialog, QFrame,
+    QScrollArea, QTableWidget, QTableWidgetItem
 )
-from PySide6.QtGui import QAction, QIcon, QDesktopServices, QPixmap
+from PySide6.QtGui import QAction, QIcon, QDesktopServices, QPixmap, QColor
 from PySide6.QtCore import Qt, QUrl, QSize, QTimer
 
 try:
     from user_auth import verify_user, get_user_profile
+    from auth import UserManager
 except Exception:
     from .user_auth import verify_user, get_user_profile
+    from .auth import UserManager
 
 
 def _load_admin_contact():
@@ -42,6 +45,500 @@ def _add_eye_toggle(field):
 
     action.toggled.connect(_toggle)
     field.addAction(action, QLineEdit.TrailingPosition)
+
+
+class PendingReferralsDialog(QDialog):
+    """Dialog showing pending referrals assigned to clinician on login"""
+
+    def __init__(self, username, referrals, parent=None):
+        super().__init__(parent)
+        self.go_to_referrals = False
+        self.setWindowTitle("Pending Referrals")
+        self.setFixedSize(600, 400)
+        self.setModal(True)
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f8f9fa;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+
+        # Header
+        header = QLabel(f"You have {len(referrals)} pending referral(s)")
+        header.setStyleSheet("""
+            QLabel {
+                color: #111827;
+                font-size: 16px;
+                font-weight: 700;
+            }
+        """)
+        layout.addWidget(header)
+
+        # Referrals table
+        table = QTableWidget()
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["Patient", "Urgency", "Assigned By", "Date"])
+        table.horizontalHeader().setStretchLastSection(False)
+        table.setColumnWidth(0, 150)
+        table.setColumnWidth(1, 100)
+        table.setColumnWidth(2, 120)
+        table.setColumnWidth(3, 140)
+        table.setStyleSheet("""
+            QTableWidget {
+                background-color: #ffffff;
+                border: 1px solid #dee2e6;
+                border-radius: 6px;
+            }
+            QHeaderView::section {
+                background-color: #f1f5f9;
+                color: #374151;
+                padding: 8px;
+                border: none;
+                font-weight: 600;
+                font-size: 12px;
+            }
+            QTableWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #f0f0f0;
+            }
+        """)
+
+        # Add referral rows
+        for i, referral in enumerate(referrals):
+            table.insertRow(i)
+            
+            patient_name = referral.get("patient_name", "Unknown")
+            table.setItem(i, 0, QTableWidgetItem(patient_name))
+            
+            urgency = referral.get("urgency", "normal").capitalize()
+            urgency_item = QTableWidgetItem(urgency)
+            if urgency == "Urgent":
+                urgency_item.setBackground(QColor("#fee2e2"))
+                urgency_item.setForeground(QColor("#dc2626"))
+            elif urgency == "Critical":
+                urgency_item.setBackground(QColor("#fef2f2"))
+                urgency_item.setForeground(QColor("#991b1b"))
+            table.setItem(i, 1, urgency_item)
+            
+            assigned_by = referral.get("assigned_by", "Admin")
+            table.setItem(i, 2, QTableWidgetItem(assigned_by))
+            
+            assigned_at = referral.get("assigned_at", "Unknown")
+            # Format timestamp
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(assigned_at)
+                formatted_date = dt.strftime("%b %d, %H:%M")
+            except:
+                formatted_date = assigned_at
+            table.setItem(i, 3, QTableWidgetItem(formatted_date))
+
+        layout.addWidget(table)
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
+        
+        view_btn = QPushButton("View in Referrals")
+        view_btn.setMinimumHeight(36)
+        view_btn.setStyleSheet("""
+            QPushButton {
+                background: #007bff;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #0056b3;
+            }
+        """)
+        view_btn.clicked.connect(self._accept_and_open_referrals)
+        button_layout.addWidget(view_btn)
+        
+        close_btn = QPushButton("Close")
+        close_btn.setMinimumHeight(36)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background: #e5e7eb;
+                color: #374151;
+                border: none;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #d1d5db;
+            }
+        """)
+        close_btn.clicked.connect(self.reject)
+        button_layout.addWidget(close_btn)
+        
+        layout.addLayout(button_layout)
+
+    def _accept_and_open_referrals(self):
+        self.go_to_referrals = True
+        self.accept()
+
+
+class ReferralOptionsDialog(QDialog):
+    """Dialog to choose between internal referral or generating a letter"""
+
+    def __init__(self, patient_name, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Referral Options")
+        self.setFixedSize(500, 300)
+        self.setModal(True)
+        self.selected_option = None  # "internal" or "letter"
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f8f9fa;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(32, 32, 32, 28)
+        layout.setSpacing(20)
+
+        # Header
+        title = QLabel("How would you like to refer this patient?")
+        title.setStyleSheet("""
+            QLabel {
+                color: #111827;
+                font-size: 16px;
+                font-weight: 700;
+                background: transparent;
+            }
+        """)
+        layout.addWidget(title)
+
+        # Subtitle
+        subtitle = QLabel(f"Patient: {patient_name}")
+        subtitle.setStyleSheet("""
+            QLabel {
+                color: #6b7280;
+                font-size: 12px;
+                background: transparent;
+            }
+        """)
+        layout.addWidget(subtitle)
+
+        layout.addSpacing(16)
+
+        # Option 1: Internal Referral
+        internal_btn = QPushButton()
+        internal_btn.setMinimumHeight(100)
+        internal_btn.setStyleSheet("""
+            QPushButton {
+                background: white;
+                border: 2px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 16px;
+                text-align: left;
+                color: #374151;
+            }
+            QPushButton:hover {
+                border: 2px solid #3b82f6;
+                background: #f0f9ff;
+            }
+        """)
+        
+        internal_layout = QVBoxLayout(internal_btn)
+        internal_layout.setContentsMargins(0, 0, 0, 0)
+        internal_layout.setSpacing(8)
+        
+        internal_title = QLabel("👤 Internal Referral")
+        internal_title.setStyleSheet("color: #111827; font-weight: 700; font-size: 13px;")
+        internal_layout.addWidget(internal_title)
+        
+        internal_desc = QLabel("Assign to a clinician for internal follow-up\nand case management")
+        internal_desc.setStyleSheet("color: #6b7280; font-size: 11px;")
+        internal_layout.addWidget(internal_desc)
+        
+        internal_btn.clicked.connect(lambda: self._set_option("internal"))
+        layout.addWidget(internal_btn)
+
+        # Option 2: Generate Letter
+        letter_btn = QPushButton()
+        letter_btn.setMinimumHeight(100)
+        letter_btn.setStyleSheet("""
+            QPushButton {
+                background: white;
+                border: 2px solid #e5e7eb;
+                border-radius: 8px;
+                padding: 16px;
+                text-align: left;
+                color: #374151;
+            }
+            QPushButton:hover {
+                border: 2px solid #10b981;
+                background: #f0fdf4;
+            }
+        """)
+        
+        letter_layout = QVBoxLayout(letter_btn)
+        letter_layout.setContentsMargins(0, 0, 0, 0)
+        letter_layout.setSpacing(8)
+        
+        letter_title = QLabel("📄 Generate Letter")
+        letter_title.setStyleSheet("color: #111827; font-weight: 700; font-size: 13px;")
+        letter_layout.addWidget(letter_title)
+        
+        letter_desc = QLabel("Generate formal referral letter for external\nspecialist or ophthalmology clinic")
+        letter_desc.setStyleSheet("color: #6b7280; font-size: 11px;")
+        letter_layout.addWidget(letter_desc)
+        
+        letter_btn.clicked.connect(lambda: self._set_option("letter"))
+        layout.addWidget(letter_btn)
+
+        layout.addStretch()
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setMinimumHeight(36)
+        cancel_btn.setStyleSheet("""
+            QPushButton {
+                background: #e5e7eb;
+                color: #374151;
+                border: none;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #d1d5db;
+            }
+        """)
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addStretch()
+        button_layout.addWidget(cancel_btn)
+
+        layout.addLayout(button_layout)
+
+    def _set_option(self, option):
+        """Set the selected option and accept the dialog"""
+        self.selected_option = option
+        self.accept()
+
+
+class AssignReferralDialog(QDialog):
+    """Dialog for assigning referral to a clinician"""
+
+    def __init__(self, patient_name, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Assign Referral")
+        self.setFixedSize(450, 350)
+        self.setModal(True)
+        self.selected_clinician = None
+        self.urgency_level = "normal"
+        self.notes_text = ""
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f8f9fa;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(16)
+
+        # Header
+        header = QLabel(f"Assign Referral for {patient_name}")
+        header.setStyleSheet("""
+            QLabel {
+                color: #111827;
+                font-size: 14px;
+                font-weight: 600;
+            }
+        """)
+        layout.addWidget(header)
+
+        # Get all clinicians
+        try:
+            from auth import UserManager
+        except ImportError:
+            from .auth import UserManager
+
+        all_users = UserManager.get_all_users()
+        clinicians = [u for u in all_users if u[6] == "clinician"]  # role is at index 6
+
+        if not clinicians:
+            QMessageBox.warning(self, "Error", "No clinicians available to assign referral to.")
+            self.reject()
+            return
+
+        # Clinician selection
+        clinician_label = QLabel("Select Clinician:")
+        clinician_label.setStyleSheet("color: #374151; font-weight: 600; font-size: 12px;")
+        layout.addWidget(clinician_label)
+
+        clinician_combo = QLineEdit()
+        clinician_combo.setReadOnly(True)
+        clinician_combo.setPlaceholderText("Select clinician...")
+        clinician_combo.setStyleSheet("""
+            QLineEdit {
+                background-color: white;
+                border: 1px solid #dee2e6;
+                border-radius: 4px;
+                padding: 8px;
+                color: #374151;
+            }
+        """)
+        layout.addWidget(clinician_combo)
+
+        # Clinician dropdown (using buttons for simplicity)
+        clinician_buttons_layout = QVBoxLayout()
+        clinician_buttons_layout.setSpacing(6)
+        clinician_buttons_layout.setContentsMargins(0, 0, 0, 0)
+
+        def select_clinician(username, display_name):
+            self.selected_clinician = username
+            clinician_combo.setText(display_name)
+
+        for clinician in clinicians[:5]:  # Show first 5
+            username, full_name, display_name = clinician[0], clinician[1], clinician[2]
+            btn = QPushButton(f"{display_name or full_name or username} (Optometrist)")
+            btn.setMinimumHeight(32)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background:   white;
+                    border: 1px solid #dee2e6;
+                    border-radius: 4px;
+                    color: #374151;
+                    font-size: 12px;
+                    text-align: left;
+                    padding-left: 12px;
+                }
+                QPushButton:hover {
+                    background: #f3f4f6;
+                }
+            """)
+            btn.clicked.connect(lambda checked, u=username, d=(display_name or full_name or username): select_clinician(u, d))
+            clinician_buttons_layout.addWidget(btn)
+
+        scroll = QScrollArea()
+        scroll_widget = QWidget()
+        scroll_widget.setLayout(clinician_buttons_layout)
+        scroll.setWidget(scroll_widget)
+        scroll.setWidgetResizable(True)
+        scroll.setMaximumHeight(120)
+        layout.addWidget(scroll)
+
+        # Urgency level
+        urgency_label = QLabel("Urgency Level:")
+        urgency_label.setStyleSheet("color: #374151; font-weight: 600; font-size: 12px; margin-top: 8px;")
+        layout.addWidget(urgency_label)
+
+        urgency_layout = QHBoxLayout()
+        urgency_layout.setSpacing(10)
+        for level in ["Normal", "Urgent", "Critical"]:
+            urgency_btn = QPushButton(level)
+            urgency_btn.setFixedWidth(110)
+            urgency_btn.setStyleSheet("""
+                QPushButton {
+                    background: #ffffff;
+                    border: 1px solid #dee2e6;
+                    border-radius: 4px;
+                    color: #374151;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background: #e5e7eb;
+                }
+            """)
+            urgency_btn.clicked.connect(
+                lambda checked, l=level.lower(): self._set_urgency(l, urgency_btn, urgency_layout)
+            )
+            urgency_layout.addWidget(urgency_btn)
+        urgency_layout.addStretch()
+        layout.addLayout(urgency_layout)
+
+        layout.addStretch()
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
+
+        assign_btn = QPushButton("Assign")
+        assign_btn.setMinimumHeight(36)
+        assign_btn.setStyleSheet("""
+            QPushButton {
+                background: #10b981;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #059669;
+            }
+        """)
+        assign_btn.clicked.connect(self._on_assign)
+        button_layout.addWidget(assign_btn)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setMinimumHeight(36)
+        cancel_btn.setStyleSheet("""
+            QPushButton {
+                background: #e5e7eb;
+                color: #374151;
+                border: none;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #d1d5db;
+            }
+        """)
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+
+        layout.addLayout(button_layout)
+
+    def _set_urgency(self, level, button, layout):
+        self.urgency_level = level
+        # Update button styling
+        for i in range(layout.count() - 1):  # Exclude stretch item
+            btn = layout.itemAt(i).widget()
+            if btn:
+                if btn == button:
+                    btn.setStyleSheet("""
+                        QPushButton {
+                            background: #007bff;
+                            color: white;
+                            border: none;
+                            border-radius: 4px;
+                            font-weight: 600;
+                        }
+                    """)
+                else:
+                    btn.setStyleSheet("""
+                        QPushButton {
+                            background: #ffffff;
+                            border: 1px solid #dee2e6;
+                            border-radius: 4px;
+                            color: #374151;
+                            font-size: 12px;
+                        }
+                        QPushButton:hover {
+                            background: #e5e7eb;
+                        }
+                    """)
+
+    def _on_assign(self):
+        if not self.selected_clinician:
+            QMessageBox.warning(self, "Error", "Please select a clinician")
+            return
+        self.accept()
 
 
 class ContactAdminDialog(QDialog):

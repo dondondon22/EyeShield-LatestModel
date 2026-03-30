@@ -827,6 +827,14 @@ class ScreeningPage(QWidget):
             "QDoubleSpinBox{background:#f6f8fb;color:#475569;border:1.5px solid #d3dae3;border-radius:6px;padding:6px 10px;}"
         )
         c1.addLayout(row3(field("Height", self.height), field("Weight", self.weight), field("BMI", self.bmi)))
+
+        # BMI Classification Label
+        self.bmi_classification_label = QLabel(" ")
+        self.bmi_classification_label.setStyleSheet(
+            "QLabel{font-size:10px;font-weight:600;color:#6b7280;margin-top:-4px;margin-left:10px;}"
+        )
+        c1.addWidget(self.bmi_classification_label)
+
         c1.addLayout(field("Contact", self.p_contact, "scr_label_contact"))
 
         sep = QFrame()
@@ -1166,6 +1174,29 @@ class ScreeningPage(QWidget):
             self.bmi.setValue(round(bmi_value, 1))
         else:
             self.bmi.setValue(0)
+
+        # Update BMI classification
+        bmi_value = self.bmi.value()
+        if bmi_value == 0:
+            classification = " "
+            color = "#6b7280"
+        elif bmi_value < 18.5:
+            classification = "Underweight"
+            color = "#3b82f6"
+        elif bmi_value < 25:
+            classification = "Normal Weight"
+            color = "#10b981"
+        elif bmi_value < 30:
+            classification = "Overweight"
+            color = "#f59e0b"
+        else:
+            classification = "Obese"
+            color = "#ef4444"
+        
+        self.bmi_classification_label.setText(classification)
+        self.bmi_classification_label.setStyleSheet(
+            f"QLabel{{font-size:10px;font-weight:600;color:{color};margin-top:-4px;}}"
+        )
 
     def _on_dob_text_changed(self, text):
         digits = "".join(ch for ch in text if ch.isdigit())[:8]
@@ -2342,7 +2373,7 @@ class ScreeningPage(QWidget):
             return "new_session"
         return "cancel"
 
-    def _update_screening_record(self, record_id: int, patient_data) -> bool:
+    def _update_screening_record(self, record_id: int, patient_data, screener_username: str, screener_name: str) -> bool:
         try:
             conn = sqlite3.connect(DB_FILE)
             cur = conn.cursor()
@@ -2360,10 +2391,12 @@ class ScreeningPage(QWidget):
                     symptom_flashes = ?, symptom_vision_loss = ?,
                     source_image_path = ?, heatmap_image_path = ?,
                     image_sha256 = ?, image_saved_at = ?,
-                    height = ?, weight = ?, bmi = ?, treatment_regimen = ?, prev_dr_stage = ?
+                    height = ?, weight = ?, bmi = ?, treatment_regimen = ?, prev_dr_stage = ?,
+                    original_screener_username = COALESCE(NULLIF(original_screener_username, ''), ?),
+                    original_screener_name = COALESCE(NULLIF(original_screener_name, ''), ?)
                 WHERE id = ?
                 """,
-                [*patient_data, int(record_id)],
+                [*patient_data, screener_username, screener_name, int(record_id)],
             )
             conn.commit()
             updated = cur.rowcount > 0
@@ -2538,6 +2571,8 @@ class ScreeningPage(QWidget):
             return {"status": "error", "error": str(exc)}
 
         screened_at = datetime.now().strftime("%Y-%m-%d")
+        screener_username = str(os.environ.get("EYESHIELD_CURRENT_USER", "")).strip()
+        screener_name = str(os.environ.get("EYESHIELD_CURRENT_NAME", "")).strip() or screener_username
 
         patient_data = [
             pid,
@@ -2580,9 +2615,9 @@ class ScreeningPage(QWidget):
         ]
 
         save_ok = (
-            self._update_screening_record(replace_record_id, patient_data)
+            self._update_screening_record(replace_record_id, patient_data, screener_username, screener_name)
             if replace_record_id is not None
-            else self._save_screening_to_db(patient_data)
+            else self._save_screening_to_db(patient_data, screener_username, screener_name)
         )
         if not save_ok:
             action_label = "update" if replace_record_id is not None else "save"
@@ -2771,7 +2806,7 @@ class ScreeningPage(QWidget):
         # Return to intake form — only the image needs to be uploaded
         self.stacked_widget.setCurrentIndex(0)
 
-    def _save_screening_to_db(self, patient_data):
+    def _save_screening_to_db(self, patient_data, screener_username: str, screener_name: str):
         try:
             conn = sqlite3.connect(DB_FILE)
             cur = conn.cursor()
@@ -2789,10 +2824,11 @@ class ScreeningPage(QWidget):
                     symptom_flashes, symptom_vision_loss,
                     source_image_path, heatmap_image_path,
                     image_sha256, image_saved_at,
-                    height, weight, bmi, treatment_regimen, prev_dr_stage
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    height, weight, bmi, treatment_regimen, prev_dr_stage,
+                    original_screener_username, original_screener_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                patient_data,
+                [*patient_data, screener_username, screener_name],
             )
             conn.commit()
             conn.close()

@@ -14,12 +14,263 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QGroupBox,
     QTableWidget, QTableWidgetItem, QLineEdit, QComboBox, QHeaderView,
-    QFileDialog, QDialog, QMessageBox, QMenu,
+    QFileDialog, QDialog, QMessageBox, QMenu, QScrollArea,
 )
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtGui import QColor, QIcon, QPixmap
 
 from auth import DB_FILE, UserManager
+
+
+class PatientDetailsDialog(QDialog):
+    """Read-only dialog displaying full patient screening details without fundus image."""
+
+    def __init__(self, patient_record: dict, parent=None):
+        super().__init__(parent)
+        self.record = patient_record
+        self.setWindowTitle(f"Patient Details - {patient_record.get('name', 'Unknown')}")
+        self.resize(700, 700)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+        
+        # Title
+        title = QLabel(f"{patient_record.get('name', 'N/A')}")
+        title.setStyleSheet("font-size:18px;font-weight:700;color:#1f4f77;")
+        layout.addWidget(title)
+        
+        # Create scrollable content area
+        from PySide6.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(scroll.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea{border:none;background:transparent;}")
+        
+        content = QWidget()
+        content.setStyleSheet("background:transparent;")
+        content_layout = QVBoxLayout(content)
+        content_layout.setSpacing(16)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Helper function to create field rows
+        def add_field(label_text: str, value_text: str):
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            label = QLabel(f"{label_text}:")
+            label.setStyleSheet("font-weight:600;color:#3f7ca7;min-width:150px;")
+            value = QLabel(value_text)
+            value.setStyleSheet("color:#475569;word-wrap:on;")
+            value.setWordWrap(True)
+            row.addWidget(label)
+            row.addWidget(value, 1)
+            content_layout.addLayout(row)
+        
+        def add_section(section_title: str):
+            sep = QLabel(section_title.upper())
+            sep.setStyleSheet("font-size:12px;font-weight:700;color:#3f7ca7;margin-top:8px;letter-spacing:1px;")
+            content_layout.addWidget(sep)
+        
+        # Patient Information Section
+        add_section("Patient Information")
+        add_field("Patient ID", str(patient_record.get("patient_id") or "N/A"))
+        add_field("Name", str(patient_record.get("name") or "N/A"))
+        add_field("Age", str(patient_record.get("age") or "N/A"))
+        add_field("Date of Birth", str(patient_record.get("birthdate") or "N/A"))
+        add_field("Sex", str(patient_record.get("sex") or "N/A"))
+        add_field("Contact", str(patient_record.get("contact") or "N/A"))
+        add_field("Eye Screened", str(patient_record.get("eyes") or "N/A"))
+        
+        # Vital Signs Section
+        add_section("Vital Signs & Measurements")
+        add_field("Height", str(patient_record.get("height") or "N/A") + (" cm" if patient_record.get("height") else ""))
+        add_field("Weight", str(patient_record.get("weight") or "N/A") + (" kg" if patient_record.get("weight") else ""))
+        add_field("BMI", str(patient_record.get("bmi") or "N/A"))
+        add_field("Visual Acuity - Left", str(patient_record.get("visual_acuity_left") or "N/A"))
+        add_field("Visual Acuity - Right", str(patient_record.get("visual_acuity_right") or "N/A"))
+        
+        bp_sys = patient_record.get("blood_pressure_systolic") or "—"
+        bp_dia = patient_record.get("blood_pressure_diastolic") or "—"
+        add_field("Blood Pressure", f"{bp_sys}/{bp_dia} mmHg")
+        
+        fbs = patient_record.get("fasting_blood_sugar") or "N/A"
+        rbs = patient_record.get("random_blood_sugar") or "N/A"
+        add_field("Blood Glucose (FBS/RBS)", f"{fbs} / {rbs} mg/dL")
+        
+        # Symptoms Section
+        add_section("Symptoms")
+        symptoms = []
+        if patient_record.get("symptom_blurred_vision") == "True":
+            symptoms.append("Blurred vision")
+        if patient_record.get("symptom_floaters") == "True":
+            symptoms.append("Floaters")
+        if patient_record.get("symptom_flashes") == "True":
+            symptoms.append("Flashes")
+        if patient_record.get("symptom_vision_loss") == "True":
+            symptoms.append("Vision loss")
+        symptom_text = ", ".join(symptoms) if symptoms else "None reported"
+        add_field("Reported Symptoms", symptom_text)
+        
+        # Clinical History Section
+        add_section("Clinical History")
+        add_field("Diabetes Type", str(patient_record.get("diabetes_type") or "N/A"))
+        add_field("Diagnosis Date", str(patient_record.get("diabetes_diagnosis_date") or "N/A"))
+        add_field("Duration", str(patient_record.get("duration") or "N/A"))
+        add_field("HbA1c", str(patient_record.get("hba1c") or "N/A") + ("%" if patient_record.get("hba1c") else ""))
+        add_field("Treatment Regimen", str(patient_record.get("treatment_regimen") or "N/A"))
+        add_field("Previous DR Stage", str(patient_record.get("prev_dr_stage") or "N/A"))
+        prev_treatment = "Yes" if patient_record.get("prev_treatment") == "True" else "No"
+        add_field("Previous DR Treatment", prev_treatment)
+        
+        # Screening Result Section
+        add_section("Screening Result")
+        add_field("Result", str(patient_record.get("result") or "N/A"))
+        add_field("Confidence", str(patient_record.get("confidence") or "N/A"))
+        add_field("Screened At", str(patient_record.get("screened_at") or "N/A"))
+        add_field("Screened By", str(patient_record.get("original_screener_name") or patient_record.get("original_screener_username") or "N/A"))
+        
+        # Clinical Notes Section
+        notes = patient_record.get("notes") or ""
+        if notes and notes.strip():
+            add_section("Clinical Notes")
+            notes_label = QLabel(str(notes))
+            notes_label.setWordWrap(True)
+            notes_label.setStyleSheet("color:#475569;background:#f6f8fb;border:1px solid #d3dae3;border-radius:6px;padding:10px;")
+            content_layout.addWidget(notes_label)
+        
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+        
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.setMinimumHeight(36)
+        close_btn.setStyleSheet(
+            "QPushButton{background:#1f6fe5;color:#ffffff;border:1px solid #1a5fc4;border-radius:6px;}"
+            "QPushButton:hover{background:#1b63cf;}"
+        )
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+        
+        self.setStyleSheet("QDialog{background:#ffffff;}")
+
+
+class ReferralDetailDialog(QDialog):
+    """Dialog displaying referred patient details WITH fundus image for review."""
+
+    def __init__(self, patient_record: dict, parent=None):
+        super().__init__(parent)
+        self.record = patient_record
+        self.setWindowTitle(f"Referral Review - {patient_record.get('name', 'Unknown')}")
+        self.resize(1000, 700)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        # Left side: Patient Details (scrollable)
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(left_scroll.Shape.NoFrame)
+        left_scroll.setStyleSheet("QScrollArea{border:none;background:transparent;}")
+        left_scroll.setMaximumWidth(400)
+
+        left_content = QWidget()
+        left_content.setStyleSheet("background:transparent;")
+        left_layout = QVBoxLayout(left_content)
+        left_layout.setSpacing(14)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        def add_field(label_text: str, value_text: str):
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            label = QLabel(f"{label_text}:")
+            label.setStyleSheet("font-weight:600;color:#3f7ca7;min-width:120px;")
+            value = QLabel(value_text)
+            value.setStyleSheet("color:#475569;word-wrap:on;")
+            value.setWordWrap(True)
+            row.addWidget(label)
+            row.addWidget(value, 1)
+            left_layout.addLayout(row)
+
+        def add_section(section_title: str):
+            sep = QLabel(section_title.upper())
+            sep.setStyleSheet("font-size:11px;font-weight:700;color:#3f7ca7;margin-top:6px;letter-spacing:0.8px;")
+            left_layout.addWidget(sep)
+
+        add_section("Patient Information")
+        add_field("Patient ID", str(patient_record.get("patient_id") or "N/A"))
+        add_field("Name", str(patient_record.get("name") or "N/A"))
+        add_field("Age", str(patient_record.get("age") or "N/A"))
+        add_field("Sex", str(patient_record.get("sex") or "N/A"))
+
+        add_section("Vital Signs")
+        add_field("Height", str(patient_record.get("height") or "N/A") + (" cm" if patient_record.get("height") else ""))
+        add_field("Weight", str(patient_record.get("weight") or "N/A") + (" kg" if patient_record.get("weight") else ""))
+        add_field("BMI", str(patient_record.get("bmi") or "N/A"))
+
+        bp_sys = patient_record.get("blood_pressure_systolic") or "-"
+        bp_dia = patient_record.get("blood_pressure_diastolic") or "-"
+        add_field("Blood Pressure", f"{bp_sys}/{bp_dia} mmHg")
+
+        add_section("Clinical History")
+        add_field("Diabetes Type", str(patient_record.get("diabetes_type") or "N/A"))
+        add_field("HbA1c", str(patient_record.get("hba1c") or "N/A") + ("%" if patient_record.get("hba1c") else ""))
+        add_field("Treatment", str(patient_record.get("treatment_regimen") or "N/A"))
+        add_field("Previous DR", str(patient_record.get("prev_dr_stage") or "N/A"))
+
+        add_section("Screening Result")
+        add_field("Result", str(patient_record.get("result") or "N/A"))
+        add_field("Confidence", str(patient_record.get("confidence") or "N/A"))
+        add_field("Screened By", str(patient_record.get("original_screener_name") or patient_record.get("original_screener_username") or "N/A"))
+        add_field("Screened At", str(patient_record.get("screened_at") or "N/A"))
+
+        left_layout.addStretch()
+        left_scroll.setWidget(left_content)
+        layout.addWidget(left_scroll)
+
+        # Right side: Fundus Image
+        right_container = QWidget()
+        right_layout = QVBoxLayout(right_container)
+        right_layout.setSpacing(10)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        image_title = QLabel("FUNDUS IMAGE")
+        image_title.setStyleSheet("font-size:11px;font-weight:700;color:#3f7ca7;letter-spacing:0.8px;")
+        right_layout.addWidget(image_title)
+
+        image_label = QLabel()
+        image_label.setAlignment(Qt.AlignCenter)
+        image_label.setStyleSheet("border:1px solid #d3dae3;border-radius:6px;background:#f6f8fb;")
+        image_label.setMinimumSize(500, 500)
+
+        source_image = patient_record.get("source_image_path") or ""
+        if source_image and os.path.isfile(source_image):
+            try:
+                pixmap = QPixmap(source_image)
+                if not pixmap.isNull():
+                    scaled = pixmap.scaledToHeight(500, Qt.SmoothTransformation)
+                    image_label.setPixmap(scaled)
+                else:
+                    image_label.setText("Image could not be loaded")
+            except Exception:
+                image_label.setText("Error loading image")
+        else:
+            image_label.setText("No fundus image available")
+
+        right_layout.addWidget(image_label, 1)
+
+        close_btn = QPushButton("Close")
+        close_btn.setMinimumHeight(36)
+        close_btn.setStyleSheet(
+            "QPushButton{background:#1f6fe5;color:#ffffff;border:1px solid #1a5fc4;border-radius:6px;}"
+            "QPushButton:hover{background:#1b63cf;}"
+        )
+        close_btn.clicked.connect(self.accept)
+        right_layout.addWidget(close_btn)
+
+        layout.addWidget(right_container)
+        self.setStyleSheet("QDialog{background:#ffffff;}")
 
 
 class ArchivedRecordsDialog(QDialog):
@@ -359,8 +610,8 @@ class ReportsPage(QWidget):
         rl.setContentsMargins(18, 16, 18, 18)
         rl.setSpacing(14)
 
-        self.results_table = QTableWidget(0, 6)
-        self.results_table.setHorizontalHeaderLabels(["Patient ID","Name","Eye Screened","Screening Date","Result","Confidence"])
+        self.results_table = QTableWidget(0, 7)
+        self.results_table.setHorizontalHeaderLabels(["Patient ID","Name","Eye Screened","Screening Date","Result","Confidence","Screened by"])
         self.results_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setShowGrid(False)
@@ -372,6 +623,7 @@ class ReportsPage(QWidget):
         self.results_table.itemSelectionChanged.connect(self._update_action_buttons)
         self.results_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.results_table.customContextMenuRequested.connect(self._open_results_context_menu)
+        self.results_table.doubleClicked.connect(self._on_table_row_double_clicked)
         self.results_table.setMinimumHeight(420)
         self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.results_table.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
@@ -379,6 +631,7 @@ class ReportsPage(QWidget):
         self.results_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.results_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.results_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.results_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         rl.addWidget(self.results_table)
         root.addWidget(self._results_group)
 
@@ -441,11 +694,13 @@ class ReportsPage(QWidget):
             cur = conn.cursor()
             cur.execute("""
                 SELECT id, patient_id, name, eyes, screened_at, result, confidence, diabetes_type, hba1c,
-                       archived_at, archived_by, archive_reason
+                       archived_at, archived_by, archive_reason,
+                       original_screener_username, original_screener_name
                 FROM patient_records ORDER BY id DESC
             """)
             rows = [{"id":r[0],"patient_id":r[1],"name":r[2],"eyes":r[3],"screened_at":r[4],"result":r[5],"confidence":r[6],
-                     "diabetes_type":r[7],"hba1c":r[8],"archived_at":r[9],"archived_by":r[10],"archive_reason":r[11]}
+                     "diabetes_type":r[7],"hba1c":r[8],"archived_at":r[9],"archived_by":r[10],"archive_reason":r[11],
+                     "original_screener_username":r[12],"original_screener_name":r[13]}
                     for r in cur.fetchall()]
             conn.close()
         except Exception as err:
@@ -485,6 +740,9 @@ class ReportsPage(QWidget):
                 key=lambda item: (self._eye_sort_key(item.get("eyes")), -int(item.get("id") or 0)),
             )
             primary = ordered_rows[0]
+            owner_name = str(primary.get("original_screener_name") or "").strip()
+            owner_username = str(primary.get("original_screener_username") or "").strip()
+            screened_by_display = self._format_doctor_label(owner_name or owner_username)
             record_ids = [int(item.get("id") or 0) for item in ordered_rows if int(item.get("id") or 0)]
             selection_key = f"{key[0]}|{key[1]}|{'-'.join(str(i) for i in record_ids)}"
             eyes_text = "\n".join(str(item.get("eyes") or "—") for item in ordered_rows)
@@ -499,6 +757,7 @@ class ReportsPage(QWidget):
                     date_text,
                     result_text,
                     confidence_text,
+                    screened_by_display,
                 ]
             ).lower()
             display_rows.append(
@@ -511,11 +770,14 @@ class ReportsPage(QWidget):
                     "screened_at": date_text,
                     "result": result_text,
                     "confidence": confidence_text,
+                    "screened_by": screened_by_display,
                     "diabetes_type": primary.get("diabetes_type"),
                     "hba1c": primary.get("hba1c"),
                     "archived_at": primary.get("archived_at"),
                     "archived_by": primary.get("archived_by"),
                     "archive_reason": primary.get("archive_reason"),
+                    "original_screener_username": primary.get("original_screener_username"),
+                    "original_screener_name": primary.get("original_screener_name"),
                     "record_ids": record_ids,
                     "source_rows": ordered_rows,
                     "_search_text": combined_search,
@@ -584,6 +846,9 @@ class ReportsPage(QWidget):
             confidence_item = QTableWidgetItem(str(row["confidence"] or ""))
             confidence_item.setTextAlignment(Qt.AlignCenter)
             self.results_table.setItem(i, 5, confidence_item)
+            screened_by_item = QTableWidgetItem(str(row.get("screened_by") or "--"))
+            screened_by_item.setTextAlignment(Qt.AlignCenter)
+            self.results_table.setItem(i, 6, screened_by_item)
         self.results_table.setSortingEnabled(True)
         self.results_table.resizeRowsToContents()
         self.filtered_count_label.setText(f"Total: {len(self._filtered_rows)}")
@@ -600,6 +865,26 @@ class ReportsPage(QWidget):
         total = len(rows)
         self._summary_cache = {"total_screenings": total}
 
+    @staticmethod
+    def _format_doctor_label(name_value: str) -> str:
+        name = str(name_value or "").strip()
+        if not name:
+            return "--"
+        if name.lower().startswith("dr"):
+            return name
+        return f"Dr. {name}"
+
+    def _can_rescreen_record(self, record: dict) -> bool:
+        owner_username = str(record.get("original_screener_username") or "").strip().lower()
+        if not owner_username:
+            return True
+        return owner_username == str(self.username or "").strip().lower()
+
+    def _record_owner_label(self, record: dict) -> str:
+        owner_name = str(record.get("original_screener_name") or "").strip()
+        owner_username = str(record.get("original_screener_username") or "").strip()
+        return owner_name or owner_username or "original screener"
+
     def _open_results_context_menu(self, pos):
         item = self.results_table.itemAt(pos)
         if item is None:
@@ -610,16 +895,21 @@ class ReportsPage(QWidget):
             return
 
         menu = QMenu(self)
+        view_action = menu.addAction("View Details")
+        menu.addSeparator()
         generate_action = menu.addAction("Generate Report")
         referral_action = menu.addAction("Generate Referral")
         rescreen_action = menu.addAction("Rescreen Patient")
+        rescreen_action.setEnabled(self._can_rescreen_record(record))
         archive_action = None
         if self.is_admin:
             archive_action = menu.addAction("Archive Record")
             archive_action.setEnabled(not bool(record.get("archived_at")))
 
         chosen = menu.exec(self.results_table.viewport().mapToGlobal(pos))
-        if chosen == generate_action:
+        if chosen == view_action:
+            self._show_patient_details()
+        elif chosen == generate_action:
             self.generate_report()
         elif chosen == referral_action:
             self.generate_referral()
@@ -638,9 +928,107 @@ class ReportsPage(QWidget):
         record = self._get_selected_record()
         self.report_btn.setEnabled(bool(record))
         self.referral_btn.setEnabled(bool(record))
-        self.rescreen_btn.setEnabled(bool(record))
+        can_rescreen = bool(record and self._can_rescreen_record(record))
+        self.rescreen_btn.setEnabled(can_rescreen)
+        if record and not can_rescreen:
+            self.rescreen_btn.setToolTip(
+                f"Only the original screener ({self._record_owner_label(record)}) can rescreen this case."
+            )
+        else:
+            self.rescreen_btn.setToolTip("Start a new screening for the selected patient")
         if self.is_admin:
             self.archive_btn.setEnabled(bool(record and not record["archived_at"]))
+
+    def _on_table_row_double_clicked(self, index):
+        """Handle double-click on table row to show patient details."""
+        self._show_patient_details()
+
+    def _show_patient_details(self):
+        """Show view-only patient details dialog."""
+        record = self._get_selected_record()
+        if not record:
+            return
+        
+        record_id = record.get("id") or (record.get("record_ids")[0] if record.get("record_ids") else None)
+        if not record_id:
+            QMessageBox.warning(self, "Patient Details", "Unable to retrieve patient record.")
+            return
+        
+        full_record = self._fetch_full_patient_record(record_id)
+        if not full_record:
+            QMessageBox.warning(self, "Patient Details", "Unable to load patient details.")
+            return
+        
+        dialog = PatientDetailsDialog(full_record, self)
+        dialog.exec()
+
+    def _fetch_full_patient_record(self, record_id: int) -> dict:
+        """Fetch complete patient record from database."""
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, patient_id, name, birthdate, age, sex, contact, eyes, 
+                       diabetes_type, duration, hba1c, prev_treatment, notes, 
+                       result, confidence, screened_at, archived_at, archived_by, 
+                       archive_reason, original_screener_username, original_screener_name,
+                       height, weight, bmi, visual_acuity_left, visual_acuity_right,
+                       blood_pressure_systolic, blood_pressure_diastolic,
+                       fasting_blood_sugar, random_blood_sugar,
+                       diabetes_diagnosis_date, treatment_regimen, prev_dr_stage,
+                       symptom_blurred_vision, symptom_floaters, symptom_flashes,
+                       symptom_vision_loss
+                FROM patient_records
+                WHERE id = ?
+            """, (record_id,))
+            row = cur.fetchone()
+            conn.close()
+            
+            if not row:
+                return None
+            
+            return {
+                "id": row[0],
+                "patient_id": row[1],
+                "name": row[2],
+                "birthdate": row[3],
+                "age": row[4],
+                "sex": row[5],
+                "contact": row[6],
+                "eyes": row[7],
+                "diabetes_type": row[8],
+                "duration": row[9],
+                "hba1c": row[10],
+                "prev_treatment": row[11],
+                "notes": row[12],
+                "result": row[13],
+                "confidence": row[14],
+                "screened_at": row[15],
+                "archived_at": row[16],
+                "archived_by": row[17],
+                "archive_reason": row[18],
+                "original_screener_username": row[19],
+                "original_screener_name": row[20],
+                "height": row[21],
+                "weight": row[22],
+                "bmi": row[23],
+                "visual_acuity_left": row[24],
+                "visual_acuity_right": row[25],
+                "blood_pressure_systolic": row[26],
+                "blood_pressure_diastolic": row[27],
+                "fasting_blood_sugar": row[28],
+                "random_blood_sugar": row[29],
+                "diabetes_diagnosis_date": row[30],
+                "treatment_regimen": row[31],
+                "prev_dr_stage": row[32],
+                "symptom_blurred_vision": row[33],
+                "symptom_floaters": row[34],
+                "symptom_flashes": row[35],
+                "symptom_vision_loss": row[36],
+            }
+        except Exception as err:
+            print(f"Error fetching patient record: {err}")
+            return None
 
     def open_archived_records_window(self):
         self.refresh_report()
@@ -673,6 +1061,19 @@ class ReportsPage(QWidget):
         record = self._get_selected_record()
         if not record:
             QMessageBox.information(self, "Rescreen Patient", "Select a patient record to rescreen.")
+            return
+
+        if not self._can_rescreen_record(record):
+            owner_text = self._record_owner_label(record)
+            UserManager.add_activity_log(
+                self.username,
+                f"RESCREEN_BLOCKED patient_id={record.get('patient_id')}; owner={owner_text}",
+            )
+            QMessageBox.warning(
+                self,
+                "Rescreen Restricted",
+                f"Only the original screening doctor ({owner_text}) can rescreen this patient.",
+            )
             return
 
         # Get the actual record ID - use first record_id if multiple exist
@@ -715,6 +1116,10 @@ class ReportsPage(QWidget):
 
         # Navigate to screening page
         main_window.pages.setCurrentIndex(1)
+        UserManager.add_activity_log(
+            self.username,
+            f"RESCREEN_ALLOWED patient_id={record.get('patient_id')}; record_id={actual_record_id}; replace_mode={replace_mode}",
+        )
 
 
     def restore_record(self, record):
@@ -832,7 +1237,8 @@ class ReportsPage(QWidget):
                        symptom_blurred_vision, symptom_floaters,
                       symptom_flashes, symptom_vision_loss,
                       source_image_path, heatmap_image_path,
-                      image_sha256, image_saved_at
+                      image_sha256, image_saved_at,
+                      original_screener_username, original_screener_name
                 FROM patient_records WHERE id=?
             """, (record_id,))
             row = cur.fetchone()
@@ -851,6 +1257,7 @@ class ReportsPage(QWidget):
                 "symptom_flashes":row[24],"symptom_vision_loss":row[25],
                 "source_image_path":row[26],"heatmap_image_path":row[27],
                 "image_sha256":row[28],"image_saved_at":row[29],
+                "original_screener_username":row[30],"original_screener_name":row[31],
             }
         except Exception:
             return None
@@ -1109,10 +1516,10 @@ class ReportsPage(QWidget):
         report_date = datetime.now().strftime("%B %d, %Y  %I:%M %p")
         screening_date = str(full.get("screened_at") or "").strip() or report_date
 
-        screened_by_name  = str(self.display_name or os.environ.get("EYESHIELD_CURRENT_NAME", "") or self.username).strip()
-        screened_by_title = str(self.display_title or os.environ.get("EYESHIELD_CURRENT_TITLE", "")).strip()
-        screened_by_raw   = (f"{screened_by_name} ({screened_by_title})" if screened_by_name and screened_by_title else screened_by_name)
-        screened_by       = escape(screened_by_raw) if screened_by_raw else "&#8212;"
+        created_by_raw = str(full.get("original_screener_name") or full.get("original_screener_username") or "").strip()
+        finalized_by_raw = str(self.display_name or os.environ.get("EYESHIELD_CURRENT_NAME", "") or self.username).strip()
+        created_by = escape(self._format_doctor_label(created_by_raw or finalized_by_raw))
+        finalized_by = escape(self._format_doctor_label(finalized_by_raw))
 
         dur_raw  = str(full.get("duration") or "").strip()
         dur_disp = f"{escape(dur_raw)} year(s)" if dur_raw and dur_raw != "0" else "&#8212;"
@@ -1329,7 +1736,7 @@ class ReportsPage(QWidget):
   <td style="padding:16px 20px;background:#f9fafb;border-bottom:3px solid #1f2937;">
     <div style="font-size:18pt;font-weight:700;color:#111827;margin-bottom:4px;">DIABETIC RETINOPATHY SCREENING REPORT</div>
     <div style="font-size:8.5pt;color:#6b7280;">
-      <b>Generated:</b> {report_date} &nbsp;|&nbsp; <b>Screened by:</b> {screened_by}
+            <b>Generated:</b> {report_date} &nbsp;|&nbsp; <b>Created by:</b> {created_by}
     </div>
   </td>
 </tr>
@@ -1412,7 +1819,9 @@ class ReportsPage(QWidget):
   <!-- FOOTER -->
   <div style="margin-top:24px;padding-top:14px;border-top:2px solid #e5e7eb;">
     <div style="font-size:7.5pt;color:#9ca3af;line-height:1.8;">
-      <b>Screened by:</b> {screened_by} &nbsp;|&nbsp; <b>Generated:</b> {report_date}<br>
+            <b>Created by:</b> {created_by}<br>
+            <b>Finalized by:</b> {finalized_by}<br>
+            <b>Generated:</b> {report_date}<br>
       <i>This report is AI-assisted and does not replace the judgment of a licensed eye care professional. All findings must be reviewed and confirmed by a qualified healthcare professional before any clinical action is taken.</i>
     </div>
   </div>
@@ -1440,6 +1849,10 @@ class ReportsPage(QWidget):
 
         doc.print_(writer)
         self.status_label.setText(f"Report saved: {os.path.basename(path)}")
+        UserManager.add_activity_log(
+            self.username,
+            f"REPORT_GENERATED patient_id={full.get('patient_id')}; created_by={created_by_raw or finalized_by_raw}; finalized_by={finalized_by_raw}",
+        )
         QMessageBox.information(self, "Report Saved", f"Patient report saved to:\n{path}")
 
     def generate_referral(self):
@@ -1512,13 +1925,10 @@ class ReportsPage(QWidget):
 
         report_date = datetime.now().strftime("%B %d, %Y")
         profile = UserManager.get_user_profile(self.username) or {}
-        screened_by_name = str(profile.get("full_name") or self.display_name or os.environ.get("EYESHIELD_CURRENT_NAME", "") or self.username).strip()
-        screened_by_title = str(self.display_title or os.environ.get("EYESHIELD_CURRENT_TITLE", "")).strip()
-        screened_by_raw = (
-            f"{screened_by_name} ({screened_by_title})"
-            if screened_by_name and screened_by_title
-            else screened_by_name
-        )
+        finalized_by_raw = str(profile.get("full_name") or self.display_name or os.environ.get("EYESHIELD_CURRENT_NAME", "") or self.username).strip()
+        created_by_raw = str(full.get("original_screener_name") or full.get("original_screener_username") or "").strip()
+        created_by_label = self._format_doctor_label(created_by_raw or finalized_by_raw)
+        finalized_by_label = self._format_doctor_label(finalized_by_raw)
 
         destination_name = esc(selected_destination.get("hospital_name"))
         destination_dept = esc(selected_destination.get("department"))
@@ -1635,8 +2045,12 @@ class ReportsPage(QWidget):
     <div class=\"closing\">
         <div style=\"margin-bottom:8px;\">Sincerely,</div>
         <div class=\"signature-line\"></div>
-        <div style=\"margin-top:8px;\"><b>{esc(screened_by_raw)}</b></div>
+        <div style="margin-top:8px;"><b>{esc(finalized_by_label)}</b></div>
         <div style=\"font-size:10pt;color:#4b5563;\">Referring Clinician</div>
+        <div style="font-size:10pt;color:#4b5563;margin-top:10px;">
+            <span><b>Created by:</b> {esc(created_by_label)}</span><br>
+            <span><b>Finalized by:</b> {esc(finalized_by_label)}</span>
+        </div>
     </div>
 </div>
 
@@ -1660,4 +2074,45 @@ class ReportsPage(QWidget):
 
         doc.print_(writer)
         self.status_label.setText(f"Referral saved: {os.path.basename(path)}")
+        UserManager.add_activity_log(
+            self.username,
+            f"REFERRAL_GENERATED patient_id={full.get('patient_id')}; created_by={created_by_raw or finalized_by_raw}; finalized_by={finalized_by_raw}",
+        )
         QMessageBox.information(self, "Referral Saved", f"Referral letter saved to:\n{path}")
+        
+        # Ask if user wants to assign referral to a clinician
+        assign_reply = QMessageBox.question(
+            self,
+            "Assign Referral",
+            "Do you want to assign this referral to a clinician for follow-up?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        
+        if assign_reply == QMessageBox.StandardButton.Yes:
+            try:
+                from login import AssignReferralDialog
+            except ImportError:
+                from .login import AssignReferralDialog
+            
+            dialog = AssignReferralDialog(patient_name_raw, self)
+            if dialog.exec() == QDialog.Accepted:
+                # Create referral assignment
+                referral_id = f"REF-{datetime.now().strftime('%Y%m%d%H%M%S')}-{full.get('id', 'NA')}"
+                success = UserManager.assign_referral(
+                    referral_id=referral_id,
+                    assigned_to_username=dialog.selected_clinician,
+                    assigned_by_username=self.username,
+                    patient_name=patient_name_raw,
+                    urgency=dialog.urgency_level,
+                    notes=f"Generated from patient record ID: {full.get('id', 'N/A')}"
+                )
+                if success:
+                    QMessageBox.information(
+                        self,
+                        "Referral Assigned",
+                        f"Referral has been assigned to the clinician for follow-up."
+                    )
+                    self.status_label.setText("Referral assigned successfully")
+                else:
+                    QMessageBox.warning(self, "Error", "Failed to assign referral. It may already be assigned.")
