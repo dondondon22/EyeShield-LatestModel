@@ -1,3 +1,6 @@
+import json
+import os
+
 from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QGridLayout, QScrollArea
 from PySide6.QtCore import Qt
 
@@ -47,6 +50,8 @@ class HelpSupportPage(QWidget):
         from translations import get_pack
         pack = get_pack(language)
 
+        contact_body = self._contact_body_from_config(pack)
+
         # Clear existing items from grid
         while self._help_grid_layout.count():
             item = self._help_grid_layout.takeAt(0)
@@ -59,17 +64,55 @@ class HelpSupportPage(QWidget):
             ("hlp_faq", "hlp_faq_body"),
             ("hlp_troubleshoot", "hlp_troubleshoot_body"),
             ("hlp_privacy", "hlp_privacy_body"),
-            ("hlp_contact", "hlp_contact_body"),
+            ("hlp_contact", None),
         ]
 
         row, col = 0, 0
         for title_key, body_key in topics:
-            card = self.build_card(pack[title_key], pack[body_key])
+            body_html = contact_body if body_key is None else pack[body_key]
+            card = self.build_card(pack[title_key], body_html)
             self._help_grid_layout.addWidget(card, row, col)
             col += 1
             if col > 1:
                 col = 0
                 row += 1
+
+    @staticmethod
+    def _contact_body_from_config(pack: dict) -> str:
+        default_email = "support@eyeshield.local"
+        default_phone = "+1-000-000-0000"
+        default_hours = "Mon-Fri, 8:00 AM - 6:00 PM"
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+        email = default_email
+        phone = default_phone
+        hours = default_hours
+
+        try:
+            with open(config_path, "r", encoding="utf-8") as file:
+                loaded = json.load(file)
+            if isinstance(loaded, dict):
+                support = loaded.get("support_contact")
+                if isinstance(support, dict):
+                    email = str(support.get("email") or default_email).strip()
+                    phone = str(support.get("phone") or default_phone).strip()
+                    hours = str(support.get("hours") or default_hours).strip()
+        except (OSError, json.JSONDecodeError):
+            pass
+
+        return (
+            "<p>"
+            f"<b>IT/App Support:</b> {email}<br>"
+            f"<b>Phone:</b> {phone}<br>"
+            f"<b>Hours:</b> {hours}<br><br>"
+            "<b>When contacting support, include:</b><br>"
+            "User role, patient ID (if applicable), page name, exact error message, and time of incident."
+            "</p>"
+        )
+
+    def reload_contact_from_config(self):
+        main_window = self.window()
+        language = getattr(main_window, "_current_language", "English") if main_window is not self else "English"
+        self._build_help_groups(language)
 
     def apply_language(self, language: str):
         from translations import get_pack

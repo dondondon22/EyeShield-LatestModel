@@ -188,30 +188,95 @@ class ReportsPage(QWidget):
         self._display_row_lookup = {}
 
         self.setStyleSheet("""
-            QWidget{background:#f8f9fa;color:#212529;font-family:'Calibri','Inter','Arial';}
-            QGroupBox{background:#fff;border:1px solid #dee2e6;border-radius:8px;}
-            QLineEdit,QComboBox,QTableWidget{background:#fff;border:1px solid #ced4da;border-radius:8px;}
-            QPushButton:focus,QTableWidget:focus{border:1px solid #0d6efd;}
-            QPushButton{background:#e9ecef;color:#212529;border:1px solid #ced4da;border-radius:8px;padding:8px 16px;font-weight:600;}
-            QPushButton:hover{background:#dee2e6;}
-            QPushButton#primaryAction{background:#0d6efd;color:#fff;border:1px solid #0b5ed7;border-radius:8px;padding:8px 16px;font-weight:600;}
-            QLabel#statusLabel{color:#495057;font-size:12px;}
-            QLabel#hintLabel{color:#6c757d;font-size:12px;}
+            QWidget {
+                background: #f2f6fb;
+                color: #1f2a37;
+                font-family: 'Calibri', 'Inter', 'Arial';
+            }
+            QGroupBox {
+                background: #ffffff;
+                border: 1px solid #d8e2ee;
+                border-radius: 14px;
+            }
+            QLineEdit, QComboBox {
+                background: #ffffff;
+                border: 1px solid #c7d5e6;
+                border-radius: 10px;
+                padding: 8px 12px;
+            }
+            QLineEdit:hover, QComboBox:hover {
+                border: 1px solid #9eb9d8;
+            }
+            QLineEdit:focus, QComboBox:focus {
+                border: 1px solid #1f6fe5;
+            }
+            QTableWidget {
+                background: #ffffff;
+                border: 1px solid #d3deeb;
+                border-radius: 12px;
+                gridline-color: #edf2f7;
+                alternate-background-color: #f7fafd;
+                selection-background-color: #e8f0ff;
+                selection-color: #1f2a37;
+                padding: 4px;
+            }
+            QTableWidget::item {
+                padding: 10px 8px;
+                border: none;
+            }
+            QHeaderView::section {
+                background: #f3f7fc;
+                color: #3d526b;
+                border: none;
+                border-bottom: 1px solid #dbe6f2;
+                padding: 12px 8px;
+                font-weight: 700;
+            }
+            QPushButton:focus, QTableWidget:focus {
+                border: 1px solid #1f6fe5;
+            }
+            QPushButton {
+                background: #eef3f9;
+                color: #1f2a37;
+                border: 1px solid #c9d6e6;
+                border-radius: 10px;
+                padding: 9px 16px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #e4edf7;
+            }
+            QPushButton#primaryAction {
+                background: #1f6fe5;
+                color: #ffffff;
+                border: 1px solid #1a5fc4;
+                border-radius: 10px;
+                padding: 9px 16px;
+                font-weight: 700;
+            }
+            QLabel#statusLabel {
+                color: #4f637a;
+                font-size: 12px;
+            }
+            QLabel#hintLabel {
+                color: #62788f;
+                font-size: 12px;
+            }
         """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(16)
+        root.setContentsMargins(24, 22, 24, 22)
+        root.setSpacing(18)
 
         self._rep_title_lbl = QLabel("DR Screening Reports")
         self._rep_title_lbl.setObjectName("pageHeader")
-        self._rep_title_lbl.setStyleSheet("font-size:24px;font-weight:700;color:#007bff;font-family:'Calibri','Inter','Arial';")
-        self._rep_subtitle_lbl = QLabel("")
+        self._rep_title_lbl.setStyleSheet("font-size:26px;font-weight:700;color:#1f6fe5;font-family:'Calibri','Inter','Arial';")
+        self._rep_subtitle_lbl = QLabel("View, filter, and export diabetic retinopathy screening outcomes.")
         self._rep_subtitle_lbl.setObjectName("pageSubtitle")
-        self._rep_subtitle_lbl.setStyleSheet("font-size:13px;color:#6c757d;")
+        self._rep_subtitle_lbl.setStyleSheet("font-size:13px;color:#6b7f95;")
 
         top_bar = QHBoxLayout()
-        top_bar.setSpacing(8)
+        top_bar.setSpacing(10)
         top_bar.addWidget(self._rep_title_lbl)
         top_bar.addStretch(1)
         self.export_btn = QPushButton("Export Results")
@@ -243,47 +308,51 @@ class ReportsPage(QWidget):
         top_bar.addWidget(self.rescreen_btn)
         root.addLayout(top_bar)
 
-        self._rep_subtitle_lbl.setVisible(False)
+        root.addWidget(self._rep_subtitle_lbl)
         self.status_label = QLabel("Ready")
         self.status_label.setObjectName("statusLabel")
+        self.status_label.setStyleSheet("color:#4f637a;background:#eaf1fb;border:1px solid #d4e2f3;border-radius:10px;padding:8px 12px;")
         root.addWidget(self.status_label)
 
         self._controls_group = QGroupBox("")
         cl = QHBoxLayout(self._controls_group)
-        cl.setContentsMargins(16, 16, 16, 16)
-        cl.setSpacing(12)
+        cl.setContentsMargins(18, 16, 18, 16)
+        cl.setSpacing(14)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search by patient ID, name, eye screened, result, or confidence")
-        self.search_input.setMinimumHeight(36)
+        self.search_input.setMinimumHeight(40)
         self.search_input.textChanged.connect(self.apply_filters)
         cl.addWidget(self.search_input, 1)
         self.result_filter = QComboBox()
         self.result_filter.addItems(["All","No DR","Mild DR","Moderate DR","Severe DR","Proliferative DR"])
-        self.result_filter.setMinimumHeight(36)
+        self.result_filter.setMinimumHeight(40)
         self.result_filter.currentTextChanged.connect(self.apply_filters)
         cl.addWidget(self.result_filter)
         self.filtered_count_label = QLabel("Total: 0")
         self.filtered_count_label.setObjectName("hintLabel")
-        self.filtered_count_label.setStyleSheet("color:#6c757d;font-size:12px;background:transparent;border:none;padding:0;margin:0;")
+        self.filtered_count_label.setStyleSheet("color:#62788f;font-size:12px;background:#f3f8ff;border:1px solid #dbe7f5;border-radius:8px;padding:6px 10px;")
         cl.addWidget(self.filtered_count_label)
         root.addWidget(self._controls_group)
 
         self._results_group = QGroupBox("")
         rl = QVBoxLayout(self._results_group)
-        rl.setContentsMargins(16, 16, 16, 16)
-        rl.setSpacing(12)
+        rl.setContentsMargins(18, 16, 18, 18)
+        rl.setSpacing(14)
 
         self.results_table = QTableWidget(0, 6)
         self.results_table.setHorizontalHeaderLabels(["Patient ID","Name","Eye Screened","Screening Date","Result","Confidence"])
         self.results_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.results_table.setAlternatingRowColors(True)
+        self.results_table.setShowGrid(False)
         self.results_table.setSortingEnabled(True)
         self.results_table.verticalHeader().setVisible(False)
+        self.results_table.verticalHeader().setDefaultSectionSize(42)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.results_table.setSelectionMode(QTableWidget.SingleSelection)
         self.results_table.itemSelectionChanged.connect(self._update_action_buttons)
         self.results_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.results_table.customContextMenuRequested.connect(self._open_results_context_menu)
+        self.results_table.setMinimumHeight(420)
         self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.results_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.results_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
@@ -334,11 +403,11 @@ class ReportsPage(QWidget):
             top_icon_buttons.append(self.archived_records_btn)
 
         for button in top_icon_buttons:
-            button.setMinimumHeight(34)
+            button.setMinimumHeight(40)
             button.setStyleSheet(
-                "QPushButton{background:#0d6efd;color:#ffffff;border:1px solid #0b5ed7;border-radius:8px;padding:6px 10px;font-weight:600;}"
-                "QPushButton:hover{background:#0b5ed7;}"
-                "QPushButton:disabled{background:#6ea8fe;border:1px solid #6ea8fe;}"
+                "QPushButton{background:#1f6fe5;color:#ffffff;border:1px solid #1a5fc4;border-radius:10px;padding:8px 14px;font-weight:700;}"
+                "QPushButton:hover{background:#1b63cf;}"
+                "QPushButton:disabled{background:#8fb5f2;border:1px solid #8fb5f2;color:#edf4ff;}"
             )
 
     def refresh_report(self):
@@ -365,9 +434,9 @@ class ReportsPage(QWidget):
         active = [r for r in rows if not r["archived_at"]]
         archived_count = len(rows) - len(active)
         if self.is_admin:
-            self.status_label.setText(f"Updated {len(active)} active and {archived_count} archived records at {datetime.now().strftime('%H:%M:%S')}")
+            self.status_label.setText(f"Updated {len(active)} active and {archived_count} archived records at {datetime.now().strftime('%I:%M:%S %p').lstrip('0')}")
         else:
-            self.status_label.setText(f"Updated {len(active)} screenings at {datetime.now().strftime('%H:%M:%S')}")
+            self.status_label.setText(f"Updated {len(active)} screenings at {datetime.now().strftime('%I:%M:%S %p').lstrip('0')}")
 
     @staticmethod
     def _eye_sort_key(eye_value: str) -> tuple[int, str]:
@@ -703,7 +772,7 @@ class ReportsPage(QWidget):
         from translations import get_pack
         pack = get_pack(language)
         self._rep_title_lbl.setText(pack["rep_title"])
-        self._rep_subtitle_lbl.setText("")
+        self._rep_subtitle_lbl.setText(pack["rep_subtitle"])
         self._controls_group.setTitle("")
         self._results_group.setTitle("")
         self._setup_action_buttons_ui()

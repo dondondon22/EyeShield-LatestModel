@@ -91,53 +91,70 @@ TRANSLATIONS = {
         "usr_log": "Activity Log",
         # Help & Support
         "hlp_title": "Help & Support",
-        "hlp_subtitle": "Quick guidance for daily workflows, troubleshooting, and support contacts.",
+        "hlp_subtitle": "Complete guidance for screening workflow, result safety checks, reports, and support contacts.",
         "hlp_quick_start": "Quick Start",
         "hlp_quick_start_body": """
             <ul>
-                <li>Log in with your assigned role.</li>
-                <li>Use <b>Screening</b> to capture patient details and upload a fundus image.</li>
-                <li>Review the result, then save the screening outcome.</li>
-                <li>Generate summaries in <b>Reports</b>.</li>
+                <li>Log in with your assigned role and open <b>Screening</b>.</li>
+                <li>Complete all required patient fields, then upload one fundus image (JPG/PNG/JPEG).</li>
+                <li>Click <b>Analyze Image</b>, review the AI result, confidence, and recommendations.</li>
+                <li><b>Save</b> the eye result before generating a PDF report or starting a new patient.</li>
+                <li>For bilateral workflow, screen and save one eye first, then use <b>Screen Other Eye</b>.</li>
+                <li>Use <b>Reports</b> for filtering, exports, and archived-record management.</li>
             </ul>
             """,
         "hlp_howto": "How-to Guides",
         "hlp_howto_body": """
             <ul>
-                <li><b>New screening:</b> Enter patient info, upload image, analyze, then save.</li>
-                <li><b>Review results:</b> Open <b>Reports</b> to view all DR screening outcomes.</li>
-                <li><b>Export report:</b> Use <b>Reports</b> to export all screening results.</li>
+                <li><b>New screening:</b> Fill patient details, clinical history, and eye side, then upload image and analyze.</li>
+                <li><b>Image quality:</b> If image is marked not gradable, capture a clearer, well-lit fundus image and retry.</li>
+                <li><b>Duplicate eye record:</b> If the same patient eye already exists, choose <b>Replace Existing</b> or <b>Save as New Session</b>.</li>
+                <li><b>Generate PDF report:</b> Save first; if only one eye is screened, you can generate single-eye report or screen the other eye first.</li>
+                <li><b>Reports page:</b> Search, filter, refresh, export, and archive selected records.</li>
+                <li><b>Archived records:</b> Restore archived items when needed, or permanently delete only if allowed by policy.</li>
             </ul>
             """,
         "hlp_faq": "FAQ",
         "hlp_faq_body": """
             <ul>
-                <li><b>Cannot log in:</b> Verify username/role and reset password with Admin.</li>
-                <li><b>Missing patient:</b> Check spelling, ID format, and date filters.</li>
-                <li><b>Image not loading:</b> Use JPG/PNG and confirm file permissions.</li>
+                <li><b>Why can I not continue to analyze?</b> One or more required patient fields or image input is missing.</li>
+                <li><b>Can I upload multiple images at once?</b> No. Current workflow supports one image per analysis.</li>
+                <li><b>Why can I not generate a report?</b> You must complete analysis and save the current eye result first.</li>
+                <li><b>Why did my confidence/result not appear?</b> The model may still be analyzing, or the image failed quality checks.</li>
+                <li><b>Cannot find a patient in Reports:</b> Use search/filter, refresh records, and verify if the record was archived.</li>
+                <li><b>Can unsaved work be recovered?</b> Draft autosave is used for in-progress screening, but you should still save explicitly.</li>
             </ul>
             """,
         "hlp_troubleshoot": "Troubleshooting",
         "hlp_troubleshoot_body": """
             <ul>
-                <li>Restart the app if pages are unresponsive.</li>
-                <li>Confirm network or storage access for saving reports.</li>
-                <li>Check printer settings or switch to PDF export.</li>
+                <li><b>Validation warnings:</b> Correct missing fields, invalid name format, age range, and abnormal glucose values before proceeding.</li>
+                <li><b>Invalid image message:</b> Confirm file type and choose a valid fundus image path with read permissions.</li>
+                <li><b>Unsaved result dialogs:</b> Choose <b>Save First</b> before starting a new patient, going back, or closing the app.</li>
+                <li><b>Save failed:</b> Retry save, or select a different save location when prompted.</li>
+                <li><b>Export issues:</b> Retry from Reports and verify destination folder permissions and available disk space.</li>
+                <li><b>Camera page:</b> Temporary webcam utility only; use screening upload for final DR analysis workflow.</li>
             </ul>
             """,
         "hlp_privacy": "Privacy & Compliance",
         "hlp_privacy_body": """
             <ul>
-                <li>Only access patient data needed for care.</li>
-                <li>Do not share screenshots or exports outside approved channels.</li>
-                <li>Log out when leaving the workstation.</li>
+                <li>Access only patient records required for clinical care and documentation.</li>
+                <li>Do not share screenshots, exports, or reports outside approved clinical channels.</li>
+                <li>Use local settings such as auto-logout and confirmation prompts for safer operation.</li>
+                <li>Always log out or lock the workstation when leaving a shared device.</li>
+                <li>Archive records for workflow management, and permanently delete only per retention policy.</li>
             </ul>
             """,
         "hlp_contact": "Contact Support",
         "hlp_contact_body": """
-            <p><b>Email:</b> support@eyeshield.local<br>
+            <p>
+            <b>IT/App Support:</b> support@eyeshield.local<br>
             <b>Phone:</b> +1-000-000-0000<br>
-            <b>Hours:</b> Mon-Fri, 8:00 AM - 6:00 PM</p>
+            <b>Hours:</b> Mon-Fri, 8:00 AM - 6:00 PM<br><br>
+            <b>When contacting support, include:</b><br>
+            User role, patient ID (if applicable), page name, exact error message, and time of incident.
+            </p>
             """,
     },
 }

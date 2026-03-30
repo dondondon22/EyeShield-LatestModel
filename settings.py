@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QDialog,
     QTimeEdit,
+    QSpinBox,
 )
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtCore import QTime
@@ -451,6 +452,43 @@ class SettingsPage(QWidget):
         pref_layout.addWidget(self.language_label)
         pref_layout.addWidget(self.lang_combo)
 
+        self.session_group = QGroupBox("Session & Support")
+        session_layout = QVBoxLayout(self.session_group)
+        session_layout.setSpacing(8)
+
+        self.auto_logout_check = QCheckBox("Enable auto-logout after inactivity")
+        session_layout.addWidget(self.auto_logout_check)
+
+        self.timeout_label = QLabel("Inactivity timeout (minutes):")
+        self.timeout_label.setObjectName("fieldLabel")
+        self.timeout_spin = QSpinBox()
+        self.timeout_spin.setRange(1, 240)
+        self.timeout_spin.setValue(15)
+        self.timeout_spin.setSuffix(" min")
+        session_layout.addWidget(self.timeout_label)
+        session_layout.addWidget(self.timeout_spin)
+
+        self.support_email_label = QLabel("Help Support Email:")
+        self.support_email_label.setObjectName("fieldLabel")
+        self.support_email_input = QLineEdit()
+        self.support_email_input.setPlaceholderText("support@eyeshield.local")
+        session_layout.addWidget(self.support_email_label)
+        session_layout.addWidget(self.support_email_input)
+
+        self.support_phone_label = QLabel("Help Support Phone:")
+        self.support_phone_label.setObjectName("fieldLabel")
+        self.support_phone_input = QLineEdit()
+        self.support_phone_input.setPlaceholderText("+1-000-000-0000")
+        session_layout.addWidget(self.support_phone_label)
+        session_layout.addWidget(self.support_phone_input)
+
+        self.support_hours_label = QLabel("Help Support Hours:")
+        self.support_hours_label.setObjectName("fieldLabel")
+        self.support_hours_input = QLineEdit()
+        self.support_hours_input.setPlaceholderText("Mon-Fri, 8:00 AM - 6:00 PM")
+        session_layout.addWidget(self.support_hours_label)
+        session_layout.addWidget(self.support_hours_input)
+
         self.admin_contact_group = QGroupBox("Admin Contact (Login Page)")
         admin_contact_layout = QVBoxLayout(self.admin_contact_group)
         admin_contact_layout.setSpacing(8)
@@ -573,6 +611,7 @@ class SettingsPage(QWidget):
         layout.addWidget(self.account_group)
         layout.addWidget(self.schedule_group)
         layout.addWidget(pref_group)
+        layout.addWidget(self.session_group)
         layout.addWidget(self.admin_contact_group)
 
         # ── Action buttons (right after preferences) ──────────────────────
@@ -652,9 +691,12 @@ class SettingsPage(QWidget):
         self.load_settings()
         self.theme_combo.currentTextChanged.connect(self.apply_live_preview)
         self.lang_combo.currentTextChanged.connect(self.apply_live_preview)
+        self.auto_logout_check.toggled.connect(self._sync_timeout_enabled_state)
         self._configure_account_section()
         self._configure_schedule_section()
         self._configure_admin_contact_section()
+        self._load_support_contact_into_fields()
+        self._sync_timeout_enabled_state()
 
         self.theme_combo.setFocus()
         self.setTabOrder(self.theme_combo, self.lang_combo)
@@ -760,6 +802,8 @@ class SettingsPage(QWidget):
         return {
             "theme": "Light",
             "language": "English",
+            "auto_logout_enabled": True,
+            "inactivity_timeout_minutes": 15,
         }
 
     @staticmethod
@@ -787,6 +831,72 @@ class SettingsPage(QWidget):
         except (OSError, json.JSONDecodeError):
             pass
         return data
+
+    @staticmethod
+    def _default_support_contact() -> dict:
+        return {
+            "email": "support@eyeshield.local",
+            "phone": "+1-000-000-0000",
+            "hours": "Mon-Fri, 8:00 AM - 6:00 PM",
+        }
+
+    def _load_support_contact_data(self) -> dict:
+        data = self._default_support_contact()
+        path = self._config_path()
+        if not os.path.exists(path):
+            return data
+        try:
+            with open(path, "r", encoding="utf-8") as file:
+                loaded = json.load(file)
+            if isinstance(loaded, dict):
+                support = loaded.get("support_contact")
+                if isinstance(support, dict):
+                    for key in data:
+                        data[key] = str(support.get(key, data[key]) or data[key]).strip()
+        except (OSError, json.JSONDecodeError):
+            pass
+        return data
+
+    def _load_support_contact_into_fields(self):
+        support = self._load_support_contact_data()
+        self.support_email_input.setText(support["email"])
+        self.support_phone_input.setText(support["phone"])
+        self.support_hours_input.setText(support["hours"])
+
+    def _save_support_contact_data(self) -> tuple[bool, str]:
+        path = self._config_path()
+        config = {}
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as file:
+                    loaded = json.load(file)
+                if isinstance(loaded, dict):
+                    config = loaded
+            except (OSError, json.JSONDecodeError):
+                config = {}
+        config["support_contact"] = {
+            "email": self.support_email_input.text().strip() or self._default_support_contact()["email"],
+            "phone": self.support_phone_input.text().strip() or self._default_support_contact()["phone"],
+            "hours": self.support_hours_input.text().strip() or self._default_support_contact()["hours"],
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as file:
+                json.dump(config, file, indent=2)
+            return True, ""
+        except OSError as err:
+            return False, str(err)
+
+    def _current_support_contact_values(self) -> dict:
+        return {
+            "email": self.support_email_input.text().strip(),
+            "phone": self.support_phone_input.text().strip(),
+            "hours": self.support_hours_input.text().strip(),
+        }
+
+    def _sync_timeout_enabled_state(self):
+        enabled = self.auto_logout_check.isChecked()
+        self.timeout_label.setEnabled(enabled)
+        self.timeout_spin.setEnabled(enabled)
 
     def _load_admin_contact_into_fields(self):
         contact = self._load_admin_contact_data()
@@ -937,15 +1047,25 @@ class SettingsPage(QWidget):
         if saved_language not in {self.lang_combo.itemText(i) for i in range(self.lang_combo.count())}:
             saved_language = "English"
         self.lang_combo.setCurrentText(saved_language)
+        self.auto_logout_check.setChecked(bool(settings.get("auto_logout_enabled", True)))
+        timeout_minutes = settings.get("inactivity_timeout_minutes", 15)
+        try:
+            timeout_minutes = int(timeout_minutes)
+        except (TypeError, ValueError):
+            timeout_minutes = 15
+        self.timeout_spin.setValue(max(1, min(240, timeout_minutes)))
+        self._sync_timeout_enabled_state()
         if self._active_role() == "admin":
             self._load_admin_contact_into_fields()
         if self._active_role() == "clinician":
             self._load_schedule_fields()
+        self._load_support_contact_into_fields()
         self.apply_live_preview()
         self.status_label.setText("Settings loaded")
 
     def save_settings(self):
         admin_contact_changed = False
+        support_contact_changed = False
         if self._active_role() == "admin":
             existing_contact = self._load_admin_contact_data()
             pending_contact = self._current_admin_contact_values()
@@ -962,9 +1082,18 @@ class SettingsPage(QWidget):
                     self.status_label.setText("Save cancelled")
                     return
 
+        existing_support = self._load_support_contact_data()
+        pending_support = self._current_support_contact_values()
+        support_contact_changed = any(
+            pending_support.get(key, "").strip() != existing_support.get(key, "").strip()
+            for key in ("email", "phone", "hours")
+        )
+
         settings = {
             "theme": self.theme_combo.currentText(),
             "language": self.lang_combo.currentText(),
+            "auto_logout_enabled": self.auto_logout_check.isChecked(),
+            "inactivity_timeout_minutes": int(self.timeout_spin.value()),
         }
         try:
             with open(self._settings_path(), "w", encoding="utf-8") as file:
@@ -975,6 +1104,20 @@ class SettingsPage(QWidget):
                     self.status_label.setText("Save failed")
                     QMessageBox.warning(self, "Settings", f"Failed to save admin contact: {error_message}")
                     return
+            ok, error_message = self._save_support_contact_data()
+            if not ok:
+                self.status_label.setText("Save failed")
+                QMessageBox.warning(self, "Settings", f"Failed to save help support contact: {error_message}")
+                return
+
+            main_window = self.window()
+            if main_window is not self and hasattr(main_window, "apply_inactivity_settings"):
+                main_window.apply_inactivity_settings(
+                    self.auto_logout_check.isChecked(),
+                    int(self.timeout_spin.value()),
+                )
+            if main_window is not self and hasattr(main_window, "help_support_page") and hasattr(main_window.help_support_page, "reload_contact_from_config"):
+                main_window.help_support_page.reload_contact_from_config()
             timestamp = datetime.now().strftime("%I:%M %p").lstrip("0")
             self.status_label.setText(f"Saved locally at {timestamp}")
             if admin_contact_changed:
@@ -982,6 +1125,12 @@ class SettingsPage(QWidget):
                     self,
                     "Settings Updated",
                     "Contact Admin information was updated successfully.",
+                )
+            if support_contact_changed:
+                QMessageBox.information(
+                    self,
+                    "Settings Updated",
+                    "Help support contact details were updated successfully.",
                 )
         except OSError as err:
             self.status_label.setText("Save failed")
@@ -1098,6 +1247,13 @@ class SettingsPage(QWidget):
         defaults = self._default_settings()
         self.theme_combo.setCurrentText(defaults["theme"])
         self.lang_combo.setCurrentText(defaults["language"])
+        self.auto_logout_check.setChecked(bool(defaults["auto_logout_enabled"]))
+        self.timeout_spin.setValue(int(defaults["inactivity_timeout_minutes"]))
+        support_defaults = self._default_support_contact()
+        self.support_email_input.setText(support_defaults["email"])
+        self.support_phone_input.setText(support_defaults["phone"])
+        self.support_hours_input.setText(support_defaults["hours"])
+        self._sync_timeout_enabled_state()
         if self._active_role() == "admin":
             admin_defaults = self._default_admin_contact()
             self.admin_contact_name_input.setText(admin_defaults["name"])

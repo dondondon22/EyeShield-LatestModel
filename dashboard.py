@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QGroupBox, QMessageBox, QProgressBar, QSizePolicy,
     QFrame
 )
-from PySide6.QtCore import Qt, QSize, QByteArray
+from PySide6.QtCore import Qt, QSize, QByteArray, QEvent, QTimer
 from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont, QShortcut, QKeySequence, QColor, QGuiApplication
 from PySide6.QtSvg import QSvgRenderer
 
@@ -53,6 +53,9 @@ class EyeShieldApp(QMainWindow):
         self._saved_styles = {}
         self._logging_out = False
         self._current_language = "English"
+        self._inactivity_timeout_enabled = True
+        self._inactivity_timeout_minutes = 15
+        self._dashboard_clock_timer = None
 
         self.setWindowTitle("EyeShield – DR Screening")
         self.setMinimumSize(900, 560)
@@ -346,6 +349,9 @@ class EyeShieldApp(QMainWindow):
         saved_lang = self.settings_page.lang_combo.currentText()
         if saved_lang != "English":
             self.apply_language(saved_lang)
+
+        self._setup_inactivity_timeout()
+        self._setup_dashboard_clock()
 
     @classmethod
     def _allowed_pages_for_role(cls, role: str) -> set[int]:
@@ -997,6 +1003,87 @@ class EyeShieldApp(QMainWindow):
         self.login.show()
         self.close()
 
+    def _setup_inactivity_timeout(self):
+        self._inactivity_timer = QTimer(self)
+        self._inactivity_timer.setSingleShot(True)
+        self._inactivity_timer.timeout.connect(self._on_inactivity_timeout)
+
+        self.apply_inactivity_settings(
+            bool(self.settings_page.auto_logout_check.isChecked()),
+            int(self.settings_page.timeout_spin.value()),
+        )
+
+        app = QGuiApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    def apply_inactivity_settings(self, enabled: bool, timeout_minutes: int):
+        self._inactivity_timeout_enabled = bool(enabled)
+        self._inactivity_timeout_minutes = max(1, int(timeout_minutes or 1))
+        if self._inactivity_timeout_enabled:
+            self._restart_inactivity_timer()
+        elif hasattr(self, "_inactivity_timer"):
+            self._inactivity_timer.stop()
+
+    def _restart_inactivity_timer(self):
+        if not hasattr(self, "_inactivity_timer"):
+            return
+        if not self._inactivity_timeout_enabled:
+            return
+        self._inactivity_timer.start(self._inactivity_timeout_minutes * 60 * 1000)
+
+    def _on_inactivity_timeout(self):
+        if not self._inactivity_timeout_enabled:
+            return
+        if not self.isVisible():
+            self._restart_inactivity_timer()
+            return
+        QMessageBox.information(
+            self,
+            "Session Timeout",
+            f"No activity detected for {self._inactivity_timeout_minutes} minute(s). You will be logged out automatically.",
+        )
+        self._logging_out = True
+        from login import LoginWindow
+        self.login = LoginWindow()
+        self.login.show()
+        self.close()
+
+    def eventFilter(self, watched, event):
+        if hasattr(self, "_inactivity_timer") and self._inactivity_timeout_enabled:
+            event_type = event.type()
+            reset_types = {
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseButtonRelease,
+                QEvent.Type.MouseButtonDblClick,
+                QEvent.Type.MouseMove,
+                QEvent.Type.KeyPress,
+                QEvent.Type.KeyRelease,
+                QEvent.Type.Wheel,
+                QEvent.Type.TouchBegin,
+                QEvent.Type.TouchUpdate,
+                QEvent.Type.TouchEnd,
+            }
+            if event_type in reset_types and self.isVisible():
+                self._restart_inactivity_timer()
+        return super().eventFilter(watched, event)
+
+    @staticmethod
+    def _format_dashboard_datetime(now: datetime) -> str:
+        hour = now.strftime("%I").lstrip("0") or "0"
+        return f"{now.strftime('%A , %B %d, %Y  -  ')}{hour}:{now.strftime('%M')} {now.strftime('%p').lower()}"
+
+    def _update_dashboard_datetime_label(self):
+        if hasattr(self, "dashboard_date_label"):
+            self.dashboard_date_label.setText(self._format_dashboard_datetime(datetime.now()))
+
+    def _setup_dashboard_clock(self):
+        self._dashboard_clock_timer = QTimer(self)
+        self._dashboard_clock_timer.setInterval(1000)
+        self._dashboard_clock_timer.timeout.connect(self._update_dashboard_datetime_label)
+        self._dashboard_clock_timer.start()
+        self._update_dashboard_datetime_label()
+
     def create_dashboard_page(self):
         """Create the dashboard page layout."""
         page = QWidget()
@@ -1347,8 +1434,7 @@ class EyeShieldApp(QMainWindow):
                 f"color: {text_secondary}; font-size: 12px; font-weight: 500; background: transparent;"
             )
         if hasattr(self, "dashboard_date_label"):
-            today = datetime.now().strftime("%A, %B %d, %Y")
-            self.dashboard_date_label.setText(today)
+            self._update_dashboard_datetime_label()
             self.dashboard_date_label.setStyleSheet(
                 f"color: {accent_blue}; font-size: 13px; font-weight: 700;"
                 "border: none; border-radius: 0px;"
