@@ -920,8 +920,9 @@ class UsersPage(QWidget):
         self.users_table = QTableWidget(0, 6)
         self.users_table.setObjectName("usrUsersTable")
         self.users_table.setHorizontalHeaderLabels([
-            "Name", "Username", "Contact", "Availability Time", "Availability Days", "Role"
+            "Name", "Username", "Contact", "Availability Time", "Availability Days", "Role", "Status"
         ])
+        self.users_table.setColumnCount(7)
         self.users_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.users_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.users_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -938,6 +939,7 @@ class UsersPage(QWidget):
         self.users_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)
         self.users_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
         self.users_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.users_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
         self.users_table.setColumnWidth(1, 140)
         self.users_table.setColumnWidth(3, 165)
         self.users_table.setMinimumHeight(200)
@@ -948,6 +950,9 @@ class UsersPage(QWidget):
         self.change_role_btn = QPushButton("Change Role")
         self.change_role_btn.setObjectName("neutralBtn")
         self.change_role_btn.clicked.connect(self.change_selected_role)
+        self.toggle_active_btn = QPushButton("Set Active/Inactive")
+        self.toggle_active_btn.setObjectName("neutralBtn")
+        self.toggle_active_btn.clicked.connect(self.toggle_selected_user_status)
         self.reset_pw_btn = QPushButton("Reset Password")
         self.reset_pw_btn.setObjectName("warningBtn")
         self.reset_pw_btn.clicked.connect(self.reset_selected_password)
@@ -955,6 +960,7 @@ class UsersPage(QWidget):
         self.delete_btn.setObjectName("dangerBtn")
         self.delete_btn.clicked.connect(self.delete_user)
         action_row.addWidget(self.change_role_btn)
+        action_row.addWidget(self.toggle_active_btn)
         action_row.addWidget(self.reset_pw_btn)
         action_row.addWidget(self.delete_btn)
         table_vbox.addLayout(action_row)
@@ -1053,6 +1059,7 @@ class UsersPage(QWidget):
         edit_availability_action = menu.addAction("Edit Availability")
         menu.addSeparator()
         change_role_action = menu.addAction("Change Role")
+        toggle_active_action = menu.addAction("Set Active/Inactive")
         reset_password_action = menu.addAction("Reset Password")
         menu.addSeparator()
         delete_action = menu.addAction("Delete User")
@@ -1062,6 +1069,8 @@ class UsersPage(QWidget):
             self.edit_selected_availability()
         elif chosen == change_role_action:
             self.change_selected_role()
+        elif chosen == toggle_active_action:
+            self.toggle_selected_user_status()
         elif chosen == reset_password_action:
             self.reset_selected_password()
         elif chosen == delete_action:
@@ -1272,12 +1281,26 @@ class UsersPage(QWidget):
             role_item.setForeground(QColor(fg))
             role_item.setBackground(QColor(bg))
 
+            is_active = bool(user.get("is_active", True))
+            status_text = "Active" if is_active else "Inactive"
+            status_item = QTableWidgetItem(f"  {status_text}  ")
+            status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
+            status_item.setTextAlignment(Qt.AlignCenter)
+            status_item.setData(Qt.UserRole, is_active)
+            if is_active:
+                status_item.setForeground(QColor("#166534"))
+                status_item.setBackground(QColor("#dcfce7"))
+            else:
+                status_item.setForeground(QColor("#991b1b"))
+                status_item.setBackground(QColor("#fee2e2"))
+
             self.users_table.setItem(row, 0, name_item)
             self.users_table.setItem(row, 1, username_item)
             self.users_table.setItem(row, 2, contact_item)
             self.users_table.setItem(row, 3, availability_time_item)
             self.users_table.setItem(row, 4, availability_days_item)
             self.users_table.setItem(row, 5, role_item)
+            self.users_table.setItem(row, 6, status_item)
         self.users_table.resizeRowsToContents()
         if hasattr(self, "activity_log"):
             self.load_activity_log()
@@ -1432,6 +1455,60 @@ class UsersPage(QWidget):
         else:
             self._set_status(f"Failed to reset password for '{username}'", ok=False)
             QMessageBox.warning(self, "Reset Failed", f"Could not reset password for '{username}'.")
+
+    def toggle_selected_user_status(self):
+        row = self.users_table.currentRow()
+        if row == -1:
+            QMessageBox.warning(self, "No Selection", "Please select a user first.")
+            return
+
+        username_item = self.users_table.item(row, 1)
+        role_item = self.users_table.item(row, 5)
+        status_item = self.users_table.item(row, 6)
+        if not username_item or not role_item or not status_item:
+            return
+
+        username = username_item.text().strip()
+        role = str(role_item.data(Qt.UserRole) or "").strip().lower()
+        is_active = bool(status_item.data(Qt.UserRole))
+        target_state = not is_active
+        target_text = "active" if target_state else "inactive"
+
+        current_username, current_role = self._actor_context()
+        if role == "admin" and not target_state and username == current_username:
+            QMessageBox.warning(self, "Not Allowed", "You cannot deactivate your own admin account.")
+            return
+
+        proceed = QMessageBox.question(
+            self,
+            "Confirm Status Change",
+            f"Set '<b>{username}</b>' as <b>{target_text}</b>?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if proceed != QMessageBox.Yes:
+            return
+
+        acting_password = self.prompt_for_admin_password(self, f"set '{username}' as {target_text}")
+        if acting_password is None:
+            return
+        if not self._check_admin_password(acting_password):
+            return
+
+        success = user_store.update_user_active_status(
+            username,
+            target_state,
+            acting_username=current_username,
+            acting_role=current_role,
+        )
+        if success:
+            self._set_status(f"Status updated: {username} → {target_text}")
+            self.log_activity(username, f"Status Changed ({target_text})")
+            self.refresh_users()
+            QMessageBox.information(self, "Status Updated", f"'{username}' is now {target_text}.")
+        else:
+            self._set_status(f"Failed to update status for '{username}'", ok=False)
+            QMessageBox.warning(self, "Update Failed", f"Could not update status for '{username}'.")
 
     def log_activity(self, user, action):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

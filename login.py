@@ -369,7 +369,7 @@ class ReferralOptionsDialog(QDialog):
 class AssignReferralDialog(QDialog):
     """Dialog for assigning referral to a clinician"""
 
-    def __init__(self, patient_name, parent=None):
+    def __init__(self, patient_name, parent=None, exclude_username: str = ""):
         super().__init__(parent)
         self.setWindowTitle("Assign Referral")
         self.setMinimumSize(560, 520)
@@ -405,11 +405,20 @@ class AssignReferralDialog(QDialog):
         except ImportError:
             from .auth import UserManager
 
+        excluded = str(exclude_username or "").strip().lower()
         all_users = UserManager.get_all_users()
-        clinicians = [u for u in all_users if str(u[6] or "").strip().lower() == "clinician"]  # role at index 6
+        clinicians = [
+            u
+            for u in all_users
+            if (
+                str(u[6] or "").strip().lower() == "clinician"
+                and int(u[7] or 0) == 1
+                and str(u[0] or "").strip().lower() != excluded
+            )
+        ]  # role at index 6, username at index 0
 
         if not clinicians:
-            QMessageBox.warning(self, "Error", "No clinicians available to assign referral to.")
+            QMessageBox.warning(self, "Error", "No other clinicians available to assign this referral.")
             self.reject()
             return
 

@@ -33,7 +33,9 @@ class DatabaseConnection:
     @staticmethod
     def get_connection() -> sqlite3.Connection:
         """Get a database connection"""
-        return sqlite3.connect(DB_FILE)
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
 
 
 def get_connection() -> sqlite3.Connection:
@@ -127,6 +129,7 @@ class UserManager:
         "contact": "TEXT",
         "specialization": "TEXT",
         "availability_json": "TEXT",
+        "is_active": "INTEGER DEFAULT 1",
     }
 
     _PATIENT_RECORD_COLUMNS = {
@@ -233,7 +236,8 @@ class UserManager:
             """
             CREATE TABLE IF NOT EXISTS referral_assignments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                referral_id TEXT UNIQUE NOT NULL,
+                referral_id TEXT NOT NULL,
+                episode_no INTEGER NOT NULL DEFAULT 1,
                 assigned_to_username TEXT NOT NULL,
                 assigned_by_username TEXT NOT NULL,
                 assigned_at TEXT,
@@ -241,7 +245,9 @@ class UserManager:
                 patient_name TEXT,
                 urgency TEXT DEFAULT 'normal',
                 notes TEXT,
-                FOREIGN KEY (assigned_to_username) REFERENCES users(username)
+                FOREIGN KEY (assigned_to_username) REFERENCES users(username),
+                FOREIGN KEY (assigned_by_username) REFERENCES users(username),
+                UNIQUE(referral_id, episode_no)
             )
             """
         )
@@ -274,6 +280,7 @@ class UserManager:
         cur.execute("UPDATE users SET display_name = full_name WHERE display_name IS NULL OR TRIM(display_name) = ''")
         cur.execute("UPDATE users SET contact = '' WHERE contact IS NULL")
         cur.execute("UPDATE users SET availability_json = '' WHERE availability_json IS NULL")
+        cur.execute("UPDATE users SET is_active = 1 WHERE is_active IS NULL")
         cur.execute(
             """
             UPDATE users
@@ -767,9 +774,10 @@ class UserManager:
                     contact,
                     specialization,
                     availability_json,
+                    is_active,
                     password_hash,
                     role
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """,
                 (
                     username,
@@ -799,7 +807,7 @@ class UserManager:
         conn = get_connection()
         cur = conn.cursor()
         
-        cur.execute("SELECT id, password_hash, role FROM users WHERE username = ?", (username,))
+        cur.execute("SELECT id, password_hash, role, is_active FROM users WHERE username = ?", (username,))
         
         row = cur.fetchone()
         
@@ -807,7 +815,10 @@ class UserManager:
             conn.close()
             return None
         
-        user_id, pw_hash, role = row
+        user_id, pw_hash, role, is_active = row
+        if int(is_active or 0) != 1:
+            conn.close()
+            return None
         
         if PasswordManager.verify_password(password, pw_hash):
             if PasswordManager.needs_upgrade(pw_hash):
@@ -835,7 +846,7 @@ class UserManager:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT username, full_name, display_name, contact, specialization, availability_json, role
+            SELECT username, full_name, display_name, contact, specialization, availability_json, role, is_active
             FROM users
             WHERE username = ?
             """,
@@ -853,6 +864,7 @@ class UserManager:
             "specialization": row[4] or "",
             "availability_json": row[5] or "",
             "role": row[6],
+            "is_active": bool(row[7]),
         }
     
     @staticmethod
@@ -861,7 +873,9 @@ class UserManager:
         conn = get_connection()
         cur = conn.cursor()
         
-        cur.execute("SELECT username, full_name, display_name, contact, specialization, availability_json, role FROM users")
+        cur.execute(
+            "SELECT username, full_name, display_name, contact, specialization, availability_json, role, is_active FROM users"
+        )
         users = cur.fetchall()
         
         conn.close()
@@ -1228,7 +1242,7 @@ class UserManager:
                 """
                 SELECT username, full_name, display_name, specialization
                 FROM users
-                WHERE role = 'clinician'
+                WHERE role = 'clinician' AND is_active = 1
                 ORDER BY COALESCE(display_name, full_name, username) COLLATE NOCASE ASC
                 """
             )
@@ -1277,5 +1291,71 @@ class UserManager:
             notification_id=notification_id,
             username=username,
         )
+
+    @staticmethod
+    def log_external_referral_letter(
+        referral_id: str,
+        actor_username: str,
+        patient_name: str,
+        destination_name: str,
+        destination_department: str,
+        destination_contact: str,
+        urgency: str,
+        pdf_path: str,
+    ) -> bool:
+        """Persist audit event for generated external referral letter."""
+        return ReferralService.log_external_referral_letter(
+            get_connection=get_connection,
+            add_activity_log=UserManager.add_activity_log,
+            referral_id=referral_id,
+            actor_username=actor_username,
+            patient_name=patient_name,
+            destination_name=destination_name,
+            destination_department=destination_department,
+            destination_contact=destination_contact,
+            urgency=urgency,
+            pdf_path=pdf_path,
+        )
+
+    @staticmethod
+    def update_user_active_status(
+        username: str,
+        is_active: bool,
+        acting_username: Optional[str] = None,
+        acting_role: Optional[str] = None,
+    ) -> bool:
+        """Activate or deactivate a user account."""
+        target = str(username or "").strip()
+        if not target:
+            return False
+        if not UserManager._can_manage_users(acting_role):
+            return False
+
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT role FROM users WHERE username = ?", (target,))
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return False
+
+            role = str(row[0] or "").strip().lower()
+            desired = 1 if bool(is_active) else 0
+
+            if role == ADMIN_ROLE and desired == 0:
+                cur.execute("SELECT COUNT(*) FROM users WHERE role = ? AND is_active = 1", (ADMIN_ROLE,))
+                active_admins = int((cur.fetchone() or [0])[0])
+                if active_admins <= 1:
+                    conn.close()
+                    return False
+
+            cur.execute("UPDATE users SET is_active = ? WHERE username = ?", (desired, target))
+            conn.commit()
+            success = cur.rowcount > 0
+        except sqlite3.Error:
+            success = False
+        conn.close()
+        return success
 
 

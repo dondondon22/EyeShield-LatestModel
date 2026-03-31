@@ -17,8 +17,9 @@ class UserStore:
                 "specialization": specialization or "",
                 "availability_json": availability_json or "",
                 "role": role,
+                "is_active": bool(is_active),
             }
-            for username, full_name, display_name, contact, specialization, availability_json, role in users
+            for username, full_name, display_name, contact, specialization, availability_json, role, is_active in users
         ]
 
     @classmethod
@@ -125,6 +126,16 @@ class UserStore:
         )
 
     @classmethod
+    def update_user_active_status(cls, username, is_active, acting_username=None, acting_role=None):
+        acting_username, acting_role = cls._resolve_actor(acting_username, acting_role)
+        return AuthUserManager.update_user_active_status(
+            username,
+            bool(is_active),
+            acting_username=acting_username,
+            acting_role=acting_role,
+        )
+
+    @classmethod
     def log_activity(cls, username, action, action_time=None):
         return AuthUserManager.add_activity_log(username, action, action_time)
 
@@ -166,6 +177,7 @@ get_all_users = UserStore.get_all_users
 reset_password = UserStore.reset_password
 update_user_role = UserStore.update_user_role
 update_user_availability = UserStore.update_user_availability
+update_user_active_status = UserStore.update_user_active_status
 log_activity = UserStore.log_activity
 get_recent_activity = UserStore.get_recent_activity
 update_own_account = UserStore.update_own_account

@@ -1820,8 +1820,11 @@ img {{
         patient_name_raw = str(self._current_patient_name or "Patient").strip()
         username = getattr(self.parent_page, "username", "clinician") if self.parent_page else "clinician"
         
-        dialog = AssignReferralDialog(patient_name_raw, self)
+        dialog = AssignReferralDialog(patient_name_raw, self, exclude_username=username)
         if dialog.exec() == QDialog.Accepted:
+            if dialog.selected_clinician == username:
+                QMessageBox.warning(self, "Referral", "You cannot assign a referral to yourself.")
+                return
             # Create referral assignment
             referral_id = f"REF-{datetime.now().strftime('%Y%m%d%H%M%S')}-INTERNAL"
             success = UserManager.assign_referral(
@@ -2064,6 +2067,17 @@ body {{
 
         doc.print_(writer)
         write_activity("INFO", "REFERRAL_GENERATED", f"path={path}")
+        referral_id = f"REF-{datetime.now().strftime('%Y%m%d%H%M%S')}-LETTER"
+        UserManager.log_external_referral_letter(
+            referral_id=referral_id,
+            actor_username=username,
+            patient_name=patient_name_raw,
+            destination_name=hospital_name,
+            destination_department=hospital_dept,
+            destination_contact=hospital_contact,
+            urgency=urgency,
+            pdf_path=path,
+        )
         QMessageBox.information(self, "Referral Saved", f"Referral letter saved to:\n{path}")
 
     def _prompt_referral_destination(self) -> dict | None:

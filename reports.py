@@ -2095,8 +2095,11 @@ class ReportsPage(QWidget):
             except ImportError:
                 from .login import AssignReferralDialog
             
-            dialog = AssignReferralDialog(patient_name_raw, self)
+            dialog = AssignReferralDialog(patient_name_raw, self, exclude_username=self.username)
             if dialog.exec() == QDialog.Accepted:
+                if dialog.selected_clinician == self.username:
+                    QMessageBox.warning(self, "Error", "You cannot assign a referral to yourself.")
+                    return
                 # Create referral assignment
                 referral_id = f"REF-{datetime.now().strftime('%Y%m%d%H%M%S')}-{full.get('id', 'NA')}"
                 success = UserManager.assign_referral(
