@@ -5,6 +5,7 @@ Uses system webcam until fundus camera integration is available.Includes patient
 from datetime import datetime
 import json
 import os
+import secrets
 import shutil
 
 # On Windows, prefer the native multimedia backend for webcam reliability.
@@ -34,6 +35,8 @@ from PySide6.QtGui import QPixmap, QIcon, QImage, QPainter, QColor, QBrush
 from PySide6.QtMultimedia import QCamera, QMediaCaptureSession, QMediaDevices, QImageCapture
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtSvg import QSvgRenderer
+from typing import Optional
+from safety_runtime import write_activity
 
 
 class CameraPage(QWidget):
@@ -48,6 +51,9 @@ class CameraPage(QWidget):
         self.camera = None
         self.capture_session = None
         self.image_capture = None
+        self._video_sink = None
+        self._first_frame_seen = False
+        self._preview_watchdog_timer = None
         self.video_widget = None
         self.preview_stack = None
         self.simulation_preview = None
@@ -76,8 +82,11 @@ class CameraPage(QWidget):
         self._saved_capture_image_path = ""
         self._captured_preview_pixmap = QPixmap()
         self._capture_reviewed_by_clinician = False
+        self._capture_quality_validated = False
         self._recapture_btn = None
         self._pending_webcam_capture = False
+        self._capture_session_id = ""
+        self._mode_change_guard = False
         
         # Inactivity monitoring
         self._inactivity_timeout_enabled = False
@@ -251,7 +260,7 @@ class CameraPage(QWidget):
             """
         )
         self.start_btn.clicked.connect(self._toggle_camera)
-        self.start_btn.setIcon(self._button_icon("start_camera.svg"))
+        self.start_btn.setIcon(self._button_icon("start_camera.svg", tint="#ffffff"))
         self.start_btn.setIconSize(QSize(18, 18))
         controls_layout.addWidget(self.start_btn)
 
@@ -260,13 +269,13 @@ class CameraPage(QWidget):
 
         self.capture_btn = QPushButton("Capture Image")
         self.capture_btn.clicked.connect(self._capture_frame)
-        self.capture_btn.setIcon(self._button_icon("capture.svg", "camera.svg"))
+        self.capture_btn.setIcon(self._button_icon("capture.svg", "camera.svg", tint="#1f6fe5"))
         self.capture_btn.setIconSize(QSize(18, 18))
         capture_validate_row.addWidget(self.capture_btn)
 
-        self.validate_btn = QPushButton("Validate")
+        self.validate_btn = QPushButton("Quality Check")
         self.validate_btn.clicked.connect(self._validate_capture_placeholder)
-        self.validate_btn.setIcon(self._button_icon("analyze.svg"))
+        self.validate_btn.setIcon(self._button_icon("validate.svg", "analyze.svg", tint="#1f6fe5"))
         self.validate_btn.setIconSize(QSize(18, 18))
         capture_validate_row.addWidget(self.validate_btn)
 
@@ -279,7 +288,7 @@ class CameraPage(QWidget):
         preview_btn = QPushButton("Preview Saved Image")
         preview_btn.setEnabled(False)
         preview_btn.clicked.connect(self._preview_saved_capture)
-        preview_btn.setIcon(self._button_icon("preview.svg"))
+        preview_btn.setIcon(self._button_icon("preview.svg", tint="#1f6fe5"))
         preview_btn.setIconSize(QSize(18, 18))
         self._preview_capture_btn = preview_btn
         capture_workflow_row.addWidget(preview_btn)
@@ -287,14 +296,14 @@ class CameraPage(QWidget):
         recapture_btn = QPushButton("Retake Image")
         recapture_btn.setEnabled(False)
         recapture_btn.clicked.connect(self._retry_capture)
-        recapture_btn.setIcon(self._button_icon("retake_image.svg"))
+        recapture_btn.setIcon(self._button_icon("retake_image.svg", tint="#1f6fe5"))
         recapture_btn.setIconSize(QSize(18, 18))
         self._recapture_btn = recapture_btn
         capture_workflow_row.addWidget(recapture_btn)
         
         self.send_btn = QPushButton("Send to Screening")
         self.send_btn.clicked.connect(self._send_to_screening)
-        self.send_btn.setIcon(self._button_icon("send_to_screening.svg"))
+        self.send_btn.setIcon(self._button_icon("send_to_screening.svg", tint="#1f6fe5"))
         self.send_btn.setIconSize(QSize(18, 18))
 
         # Keep control buttons readable even if app-level styles override sizing.
@@ -397,6 +406,19 @@ class CameraPage(QWidget):
     def _stamp_action(self, text: str):
         self.diag_last_action_value.setText(f"{text} ({datetime.now().strftime('%I:%M:%S %p').lstrip('0')})")
 
+    def _audit_context(self) -> str:
+        patient_id = str(self._capture_context.get("patient_id") or "").strip() or "-"
+        eye = self._normalize_eye_label(self._capture_context.get("eye_label")) or "-"
+        operator = str(self._capture_context.get("operator") or "").strip() or "-"
+        mode = self.mode_combo.currentText() if self.mode_combo is not None else "-"
+        return f"patient_id={patient_id}; eye={eye}; operator={operator}; mode={mode}"
+
+    def _log_event(self, level: str, action: str, details: str):
+        try:
+            write_activity(level, action, details)
+        except Exception:
+            pass
+
     @staticmethod
     def _normalize_eye_label(value: str) -> str:
         text = str(value or "").strip().lower()
@@ -418,6 +440,22 @@ class CameraPage(QWidget):
             self.ctx_operator_value.setText(self._capture_context.get("operator") or "-")
 
     def _set_mode(self, mode_text: str):
+        if self._mode_change_guard:
+            return
+
+        if self.has_active_screening_session() and mode_text != self.MODE_WEBCAM:
+            self._mode_change_guard = True
+            idx = self.mode_combo.findText(self.MODE_WEBCAM)
+            if idx >= 0:
+                self.mode_combo.setCurrentIndex(idx)
+            self._mode_change_guard = False
+            QMessageBox.information(
+                self,
+                "Webcam Required",
+                "Clinical capture from Screening requires Webcam mode.",
+            )
+            mode_text = self.MODE_WEBCAM
+
         self._capture_ready = False
         self.quality_bar.setValue(0)
         self.diag_mode_value.setText(mode_text)
@@ -437,7 +475,7 @@ class CameraPage(QWidget):
             self.stop_camera()
             self.preview_stack.setCurrentWidget(self.simulation_preview)
             self.simulation_preview.setText("Device Mock Preview")
-            self.start_btn.setEnabled(False)
+            self.start_btn.setEnabled(True)
             self._sync_start_button()
             self.capture_btn.setEnabled(True)
             self.send_btn.setEnabled(False)
@@ -447,7 +485,7 @@ class CameraPage(QWidget):
         else:
             self.stop_camera()
             self.preview_stack.setCurrentWidget(self.simulation_preview)
-            self.start_btn.setEnabled(False)
+            self.start_btn.setEnabled(True)
             self._sync_start_button()
             self.capture_btn.setEnabled(True)
             self.send_btn.setEnabled(False)
@@ -457,6 +495,7 @@ class CameraPage(QWidget):
 
         self._save_camera_settings()
         self._stamp_action(f"Mode changed to {mode_text}")
+        self._update_send_button_state()
 
     def _show_webcam_placeholder(self):
         self.simulation_preview.setPixmap(QPixmap())
@@ -466,41 +505,67 @@ class CameraPage(QWidget):
         )
         self.preview_stack.setCurrentWidget(self.simulation_preview)
 
-    def _button_icon(self, *candidates: str) -> QIcon:
+    def _button_icon(self, *candidates: str, tint: Optional[str] = None) -> QIcon:
+        """
+        Load an icon from the icons/ directory next to this file.
+
+        SVG tinting strategy:
+          1. Render the SVG onto a transparent ARGB image using QSvgRenderer.
+          2. Paint a solid tint colour over a *second* image using
+             CompositionMode_SourceIn so only pixels that already have alpha > 0
+             are coloured — this preserves the icon shape exactly.
+          3. Return a QIcon from the composited result.
+
+        The old pixel-by-pixel loop set every pixel to the tint colour regardless
+        of the SVG shape, producing a solid coloured square instead of an icon.
+        """
         icon_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
-        dark = QColor(31, 42, 55)  # #1f2a37
-        
+        tint_color = QColor(tint) if tint else None
+        SIZE = 20  # render size in pixels
+
         for name in candidates:
             path = os.path.join(icon_dir, name)
             if not os.path.isfile(path):
                 continue
-            
+
             if path.lower().endswith(".svg"):
                 try:
                     renderer = QSvgRenderer(path)
-                    if renderer.isValid():
-                        img = QImage(20, 20, QImage.Format_ARGB32_Premultiplied)
-                        img.fill(Qt.transparent)
-                        painter = QPainter(img)
-                        renderer.render(painter)
-                        painter.end()
-                        
-                        # Recolor to dark while preserving shape/alpha structure
-                        for y in range(img.height()):
-                            for x in range(img.width()):
-                                src = QColor(img.pixel(x, y))
-                                if src.alpha() > 20:
-                                    # Keep alpha from source, use dark color
-                                    dark.setAlpha(src.alpha())
-                                    img.setPixelColor(x, y, dark)
-                        
-                        return QIcon(QPixmap.fromImage(img))
+                    if not renderer.isValid():
+                        continue
+
+                    # Step 1 – render SVG onto a transparent canvas.
+                    base = QImage(SIZE, SIZE, QImage.Format_ARGB32_Premultiplied)
+                    base.fill(Qt.transparent)
+                    p = QPainter(base)
+                    renderer.render(p)
+                    p.end()
+
+                    if tint_color is None:
+                        return QIcon(QPixmap.fromImage(base))
+
+                    # Step 2 – paint the tint colour only where the SVG has pixels
+                    # (CompositionMode_SourceIn keeps dst alpha, replaces dst colour).
+                    tint_layer = QImage(SIZE, SIZE, QImage.Format_ARGB32_Premultiplied)
+                    tint_layer.fill(Qt.transparent)
+                    p2 = QPainter(tint_layer)
+                    # Draw the rendered SVG first so we have an alpha mask.
+                    p2.drawImage(0, 0, base)
+                    # Now flood the tint colour through that mask.
+                    p2.setCompositionMode(QPainter.CompositionMode_SourceIn)
+                    p2.fillRect(tint_layer.rect(), tint_color)
+                    p2.end()
+
+                    return QIcon(QPixmap.fromImage(tint_layer))
+
                 except Exception:
                     pass
-            
+
+            # Non-SVG fallback (PNG/BMP etc.)
             icon = QIcon(path)
             if not icon.isNull():
                 return icon
+
         return QIcon()
 
     def _format_button_with_right_icon(self, button: QPushButton):
@@ -514,7 +579,7 @@ class CameraPage(QWidget):
         is_streaming = self.camera is not None
         if is_streaming:
             self.start_btn.setText("Stop Camera")
-            self.start_btn.setIcon(self._button_icon("stop_camera.svg"))
+            self.start_btn.setIcon(self._button_icon("stop_camera.svg", tint="#ffffff"))
             self.start_btn.setStyleSheet(
                 """
                 QPushButton {
@@ -532,7 +597,7 @@ class CameraPage(QWidget):
             )
         else:
             self.start_btn.setText("Start Camera")
-            self.start_btn.setIcon(self._button_icon("start_camera.svg"))
+            self.start_btn.setIcon(self._button_icon("start_camera.svg", tint="#ffffff"))
             self.start_btn.setStyleSheet(
                 """
                 QPushButton {
@@ -553,20 +618,39 @@ class CameraPage(QWidget):
 
     def _toggle_camera(self):
         if self.mode_combo.currentText() != self.MODE_WEBCAM:
-            QMessageBox.information(self, "Camera", "Switch to Webcam mode to use Start/Stop Camera.")
-            return
+            webcam_idx = self.mode_combo.findText(self.MODE_WEBCAM)
+            if webcam_idx >= 0:
+                self.mode_combo.setCurrentIndex(webcam_idx)
+            self.status_label.setText("Switched to Webcam mode. Starting camera...")
         if self.camera is None:
             self.start_camera()
         else:
             self.stop_camera()
 
     def _validate_capture_placeholder(self):
-        QMessageBox.information(
-            self,
-            "Validate",
-            "Capture validation placeholder. Image quality preprocessing will be added here.",
-        )
-        self._stamp_action("Capture validation placeholder")
+        if not self._saved_capture_metadata:
+            QMessageBox.information(self, "Quality Check", "Capture and save an image first.")
+            return
+
+        quality = int(self.quality_bar.value())
+        minimum_quality = 70
+        if quality < minimum_quality:
+            self._capture_quality_validated = False
+            self._update_send_button_state()
+            QMessageBox.warning(
+                self,
+                "Quality Check Failed",
+                f"Image quality is {quality}%. Minimum required quality is {minimum_quality}%.",
+            )
+            self._stamp_action("Capture quality check failed")
+            self._log_event("WARNING", "CAMERA_QUALITY_CHECK_FAILED", f"quality={quality}; min={minimum_quality}; {self._audit_context()}")
+            return
+
+        self._capture_quality_validated = True
+        self._update_send_button_state()
+        QMessageBox.information(self, "Quality Check", f"Image quality passed at {quality}%.")
+        self._stamp_action("Capture quality check passed")
+        self._log_event("INFO", "CAMERA_QUALITY_CHECK_PASSED", f"quality={quality}; {self._audit_context()}")
 
     def _detect_device(self):
         mode = self.mode_combo.currentText()
@@ -643,6 +727,10 @@ class CameraPage(QWidget):
         quality = 0
         captured_pixmap = QPixmap()
 
+        if self.has_active_screening_session() and mode != self.MODE_WEBCAM:
+            QMessageBox.warning(self, "Webcam Required", "Clinical capture requires Webcam mode.")
+            return
+
         if mode == self.MODE_WEBCAM:
             if self.camera is None:
                 QMessageBox.information(self, "Capture", "Start the webcam preview before capturing.")
@@ -654,6 +742,7 @@ class CameraPage(QWidget):
             self.capture_btn.setEnabled(False)
             self.status_label.setText("Capturing live frame...")
             self._stamp_action("Webcam frame capture requested")
+            self._log_event("INFO", "CAMERA_CAPTURE_REQUESTED", self._audit_context())
             self.image_capture.capture()
             return
         elif mode == self.MODE_SIMULATION:
@@ -691,12 +780,13 @@ class CameraPage(QWidget):
         self._saved_capture_timestamp = None
         self._saved_capture_image_path = ""
         self._capture_reviewed_by_clinician = False
+        self._capture_quality_validated = False
         self.quality_bar.setValue(max(0, min(100, int(quality))))
         self._capture_ready = True
         self._preview_capture_btn.setEnabled(False)
         if self._recapture_btn is not None:
             self._recapture_btn.setEnabled(True)
-        self.send_btn.setEnabled(False)
+        self._update_send_button_state()
         self._save_capture()
 
     def _on_webcam_image_captured(self, _capture_id: int, preview_image):
@@ -723,9 +813,54 @@ class CameraPage(QWidget):
         self.status_label.setText("Webcam capture failed. Please retry.")
         self._stamp_action("Webcam capture failed")
 
+    def _on_camera_runtime_error(self, _error, error_string: str):
+        message = str(error_string or "").strip() or "Unknown camera runtime error"
+        self.status_label.setText(f"Camera error: {message}")
+        self.diag_connection_value.setText("Error")
+        self._stamp_action("Webcam runtime error")
+        self._log_event("ERROR", "CAMERA_RUNTIME_ERROR", f"message={message}; {self._audit_context()}")
+
+    def _on_preview_frame_changed(self, frame):
+        if frame is None:
+            return
+        if not frame.isValid():
+            return
+        self._first_frame_seen = True
+        if self._preview_watchdog_timer is not None and self._preview_watchdog_timer.isActive():
+            self._preview_watchdog_timer.stop()
+        if self.diag_connection_value is not None:
+            self.diag_connection_value.setText("Streaming")
+
+    def _on_preview_watchdog_timeout(self):
+        if self.camera is None:
+            return
+        if self._first_frame_seen:
+            return
+        self.diag_connection_value.setText("No frames")
+        self.status_label.setText("Camera started but no live frames received.")
+        self._stamp_action("No webcam frames received")
+        self._log_event("WARNING", "CAMERA_NO_FRAMES", self._audit_context())
+        QMessageBox.warning(
+            self,
+            "Camera Preview Unavailable",
+            "The camera started, but no live frames were received.\n\n"
+            "Check Windows camera privacy permissions and close other apps using the camera, then try Start Camera again.",
+        )
+
     def _send_to_screening(self):
         if not self._saved_capture_metadata:
             QMessageBox.information(self, "Send to Screening", "Capture a frame first.")
+            return
+
+        if not self.has_active_screening_session():
+            QMessageBox.warning(
+                self,
+                "No Active Screening Session",
+                "No active Screening session was found. Return to Screening and start capture from there.",
+            )
+            self._stamp_action("Send blocked: no active screening session")
+            self._log_event("WARNING", "CAMERA_SEND_BLOCKED_NO_SESSION", self._audit_context())
+            self._update_send_button_state()
             return
 
         if not self._capture_reviewed_by_clinician:
@@ -733,6 +868,14 @@ class CameraPage(QWidget):
                 self,
                 "Review Required",
                 "Preview and review the saved capture before sending it to Screening.",
+            )
+            return
+
+        if not self._capture_quality_validated:
+            QMessageBox.information(
+                self,
+                "Quality Check Required",
+                "Run Quality Check and pass it before sending to Screening.",
             )
             return
 
@@ -748,16 +891,21 @@ class CameraPage(QWidget):
                 self._on_saved_callback(packet)
                 self.status_label.setText("Capture sent back to Screening.")
                 self._stamp_action("Capture sent to screening handoff")
+                self._log_event("INFO", "CAMERA_CAPTURE_SENT", f"path={self._saved_capture_image_path}; {self._audit_context()}")
+                self._clear_screening_session()
             except Exception as exc:
                 QMessageBox.warning(self, "Send to Screening", f"Failed to send capture to Screening:\n\n{exc}")
                 self._stamp_action("Capture send failed")
+                self._log_event("ERROR", "CAMERA_CAPTURE_SEND_FAILED", f"error={type(exc).__name__}:{exc}; {self._audit_context()}")
                 return
-            finally:
-                self._on_saved_callback = None
         else:
-            QMessageBox.information(self, "Send to Screening", "Capture packet confirmed and ready for handoff.")
-            self.status_label.setText("Capture prepared for Screening handoff.")
-            self._stamp_action("Capture confirmed for handoff")
+            QMessageBox.warning(
+                self,
+                "No Active Screening Session",
+                "Cannot complete handoff because Screening is not actively linked.",
+            )
+            self._stamp_action("Send blocked: callback missing")
+            self._log_event("WARNING", "CAMERA_SEND_BLOCKED_CALLBACK_MISSING", self._audit_context())
 
     def start_camera(self):
         if self.mode_combo.currentText() != self.MODE_WEBCAM:
@@ -783,6 +931,19 @@ class CameraPage(QWidget):
         self.capture_session.setImageCapture(self.image_capture)
         self.image_capture.imageCaptured.connect(self._on_webcam_image_captured)
         self.image_capture.errorOccurred.connect(self._on_webcam_capture_error)
+        if hasattr(self.camera, "errorOccurred"):
+            self.camera.errorOccurred.connect(self._on_camera_runtime_error)
+
+        self._video_sink = self.video_widget.videoSink() if self.video_widget is not None else None
+        self._first_frame_seen = False
+        if self._video_sink is not None:
+            self._video_sink.videoFrameChanged.connect(self._on_preview_frame_changed)
+
+        if self._preview_watchdog_timer is None:
+            self._preview_watchdog_timer = QTimer(self)
+            self._preview_watchdog_timer.setSingleShot(True)
+            self._preview_watchdog_timer.timeout.connect(self._on_preview_watchdog_timeout)
+        self._preview_watchdog_timer.start(3000)
         self.camera.start()
 
         self.preview_stack.setCurrentWidget(self.video_widget)
@@ -801,6 +962,16 @@ class CameraPage(QWidget):
                 self._show_webcam_placeholder()
             return
 
+        if self._preview_watchdog_timer is not None and self._preview_watchdog_timer.isActive():
+            self._preview_watchdog_timer.stop()
+        if self._video_sink is not None:
+            try:
+                self._video_sink.videoFrameChanged.disconnect(self._on_preview_frame_changed)
+            except Exception:
+                pass
+            self._video_sink = None
+        self._first_frame_seen = False
+
         self.camera.stop()
         self.camera.deleteLater()
         self.camera = None
@@ -818,8 +989,10 @@ class CameraPage(QWidget):
         self._stamp_action("Webcam stopped")
 
     def enter_page(self):
-        if self.mode_combo.currentText() == self.MODE_WEBCAM:
-            self.start_camera()
+        if self.mode_combo.currentText() == self.MODE_WEBCAM and self.camera is None:
+            self._show_webcam_placeholder()
+            self.status_label.setText("Webcam mode ready. Click Start Camera to begin live preview.")
+            self._stamp_action("Camera page opened")
 
     def leave_page(self):
         self.stop_camera()
@@ -838,14 +1011,55 @@ class CameraPage(QWidget):
             "eye_label": str(eye_label or "").strip(),
             "operator": str(operator or "").strip(),
         }
+        self._capture_session_id = secrets.token_hex(8)
         self._on_saved_callback = on_saved_callback
+        self._capture_quality_validated = False
         self._update_capture_context_display()
+        self._refresh_mode_lock()
+
+        if self.has_active_screening_session():
+            webcam_idx = self.mode_combo.findText(self.MODE_WEBCAM)
+            if webcam_idx >= 0:
+                self.mode_combo.setCurrentIndex(webcam_idx)
+            self.status_label.setText("Clinical capture session started. Webcam mode is required.")
+            self._stamp_action("Clinical capture session started")
+            self._log_event("INFO", "CAMERA_SESSION_STARTED", f"session={self._capture_session_id}; {self._audit_context()}")
+
+    def has_required_capture_context(self) -> bool:
+        patient_id = str(self._capture_context.get("patient_id") or "").strip()
+        eye_label = self._normalize_eye_label(self._capture_context.get("eye_label"))
+        return bool(patient_id and eye_label)
+
+    def has_active_screening_session(self) -> bool:
+        return bool(self._on_saved_callback and self._capture_session_id and self.has_required_capture_context())
+
+    def _clear_screening_session(self):
+        self._on_saved_callback = None
+        self._capture_session_id = ""
+        self._refresh_mode_lock()
+        self._update_send_button_state()
+
+    def _refresh_mode_lock(self):
+        if self.mode_combo is None:
+            return
+        self.mode_combo.setEnabled(not self.has_active_screening_session())
+
+    def _update_send_button_state(self):
+        if self.send_btn is None:
+            return
+        can_send = (
+            bool(self._saved_capture_metadata)
+            and self._capture_reviewed_by_clinician
+            and self._capture_quality_validated
+            and self.has_active_screening_session()
+        )
+        self.send_btn.setEnabled(can_send)
 
     def _build_capture_file_path(self) -> str:
         patient_id = self._capture_context.get("patient_id") or "UNLINKED"
         eye_label = self._normalize_eye_label(self._capture_context.get("eye_label")) or "EYE"
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stored_images", patient_id)
+        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stored_images", "pending", patient_id)
         os.makedirs(base_dir, exist_ok=True)
         return os.path.join(base_dir, f"{stamp}_{eye_label.lower()}_camera_source.png")
 
@@ -901,16 +1115,18 @@ class CameraPage(QWidget):
         except Exception as exc:
             QMessageBox.warning(self, "Save Capture", f"Failed to save captured image:\n\n{exc}")
             self._stamp_action("Capture save failed")
+            self._log_event("ERROR", "CAMERA_CAPTURE_SAVE_FAILED", f"error={type(exc).__name__}:{exc}; {self._audit_context()}")
             return
 
         self.status_label.setText(f"Capture saved at quality {self.quality_bar.value()}%")
         self._preview_capture_btn.setEnabled(True)
         if self._recapture_btn is not None:
             self._recapture_btn.setEnabled(True)
-        self.send_btn.setEnabled(True)
+        self._update_send_button_state()
         self._stamp_action("Capture saved")
+        self._log_event("INFO", "CAMERA_CAPTURE_SAVED", f"path={self._saved_capture_image_path}; quality={self.quality_bar.value()}; {self._audit_context()}")
         if self._on_saved_callback:
-            self.status_label.setText("Capture saved. Review it, then click Send to Screening.")
+            self.status_label.setText("Capture saved. Run Quality Check and Preview, then Send to Screening.")
             self._stamp_action("Capture saved and awaiting clinician review")
 
     def _preview_saved_capture(self):
@@ -952,6 +1168,8 @@ class CameraPage(QWidget):
         self.status_label.setText("Capture reviewed. Click Send to Screening to confirm handoff.")
 
         self._stamp_action("Saved capture previewed")
+        self._log_event("INFO", "CAMERA_CAPTURE_REVIEWED", self._audit_context())
+        self._update_send_button_state()
 
     def _retry_capture(self):
         self._saved_capture = None
@@ -960,14 +1178,16 @@ class CameraPage(QWidget):
         self._saved_capture_image_path = ""
         self._captured_preview_pixmap = QPixmap()
         self._capture_reviewed_by_clinician = False
+        self._capture_quality_validated = False
         self._capture_ready = False
-        self.send_btn.setEnabled(False)
+        self._update_send_button_state()
         self._preview_capture_btn.setEnabled(False)
         if self._recapture_btn is not None:
             self._recapture_btn.setEnabled(False)
         self.quality_bar.setValue(0)
         self.status_label.setText("Capture reset. Capture a new frame.")
         self._stamp_action("Capture reset for retry")
+        self._log_event("INFO", "CAMERA_CAPTURE_RESET", self._audit_context())
 
     def set_inactivity_context(self, timeout_enabled: bool, timeout_minutes: int, remaining_seconds: int | None = None):
         self._inactivity_timeout_enabled = bool(timeout_enabled)
@@ -1040,7 +1260,7 @@ class CameraPage(QWidget):
         if hasattr(self, "capture_btn") and self.capture_btn:
             self.capture_btn.setText(pack.get("cam_capture_save", "Capture Image"))
         if hasattr(self, "validate_btn") and self.validate_btn:
-            self.validate_btn.setText(pack.get("cam_validate_capture", "Validate"))
+            self.validate_btn.setText(pack.get("cam_validate_capture", "Quality Check"))
         if hasattr(self, "_preview_capture_btn") and self._preview_capture_btn:
             self._preview_capture_btn.setText(pack.get("cam_preview_saved_image", "Preview Saved Image"))
         if hasattr(self, "_recapture_btn") and self._recapture_btn:
