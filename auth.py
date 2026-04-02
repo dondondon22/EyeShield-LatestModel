@@ -11,14 +11,17 @@ import os
 import json
 import re
 import secrets
+from datetime import timezone
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
+from referrals import ReferralService
 
 DB_FILE = "users.db"
 VALID_ROLES = {"clinician", "admin", "viewer"}
 VALID_SPECIALIZATIONS = {"optometrist", "ophthalmologist"}
 ADMIN_ROLE = "admin"
 MIN_PASSWORD_LENGTH = 12
+MAX_ACTIVITY_QUERY_LIMIT = 500
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
 
 
@@ -32,7 +35,9 @@ class DatabaseConnection:
     @staticmethod
     def get_connection() -> sqlite3.Connection:
         """Get a database connection"""
-        return sqlite3.connect(DB_FILE)
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
 
 
 def get_connection() -> sqlite3.Connection:
@@ -126,12 +131,16 @@ class UserManager:
         "contact": "TEXT",
         "specialization": "TEXT",
         "availability_json": "TEXT",
+        "preferred_timeout_minutes": "INTEGER",
+        "is_active": "INTEGER DEFAULT 1",
     }
 
     _PATIENT_RECORD_COLUMNS = {
         "archived_at": "TEXT",
         "archived_by": "TEXT",
         "archive_reason": "TEXT",
+        "original_screener_username": "TEXT",
+        "original_screener_name": "TEXT",
         "screened_at": "TEXT",
         "source_image_path": "TEXT",
         "heatmap_image_path": "TEXT",
@@ -148,6 +157,36 @@ class UserManager:
         "symptom_floaters": "TEXT",
         "symptom_flashes": "TEXT",
         "symptom_vision_loss": "TEXT",
+        "height": "TEXT",
+        "weight": "TEXT",
+        "bmi": "TEXT",
+        "treatment_regimen": "TEXT",
+        "prev_dr_stage": "TEXT",
+        "ai_classification": "TEXT",
+        "doctor_classification": "TEXT",
+        "decision_mode": "TEXT",
+        "override_justification": "TEXT",
+        "final_diagnosis_icdr": "TEXT",
+        "doctor_findings": "TEXT",
+        "decision_by_username": "TEXT",
+        "decision_at": "TEXT",
+    }
+
+    _REFERRAL_HOSPITAL_COLUMNS = {
+        "department": "TEXT",
+        "contact_person": "TEXT",
+        "phone": "TEXT",
+        "email": "TEXT",
+        "address": "TEXT",
+        "is_active": "INTEGER DEFAULT 1",
+        "is_default": "INTEGER DEFAULT 0",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+    }
+
+    _ACTIVITY_LOG_COLUMNS = {
+        "event_type": "TEXT",
+        "metadata_json": "TEXT",
     }
     
     def __init__(self):
@@ -208,7 +247,32 @@ class UserManager:
             """
         )
 
+        UserManager._ensure_activity_log_columns(conn)
+
+        # Referral assignments table
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS referral_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                referral_id TEXT NOT NULL,
+                episode_no INTEGER NOT NULL DEFAULT 1,
+                assigned_to_username TEXT NOT NULL,
+                assigned_by_username TEXT NOT NULL,
+                assigned_at TEXT,
+                status TEXT DEFAULT 'pending',
+                patient_name TEXT,
+                urgency TEXT DEFAULT 'normal',
+                notes TEXT,
+                FOREIGN KEY (assigned_to_username) REFERENCES users(username),
+                FOREIGN KEY (assigned_by_username) REFERENCES users(username),
+                UNIQUE(referral_id, episode_no)
+            )
+            """
+        )
+
         UserManager._ensure_patient_record_columns(conn)
+        UserManager._ensure_referral_hospitals_table(conn)
+        ReferralService.ensure_schema(conn)
 
         conn.commit()
 
@@ -234,6 +298,7 @@ class UserManager:
         cur.execute("UPDATE users SET display_name = full_name WHERE display_name IS NULL OR TRIM(display_name) = ''")
         cur.execute("UPDATE users SET contact = '' WHERE contact IS NULL")
         cur.execute("UPDATE users SET availability_json = '' WHERE availability_json IS NULL")
+        cur.execute("UPDATE users SET is_active = 1 WHERE is_active IS NULL")
         cur.execute(
             """
             UPDATE users
@@ -257,9 +322,237 @@ class UserManager:
             )
 
     @staticmethod
+    def _ensure_referral_hospitals_table(conn: sqlite3.Connection) -> None:
+        """Create and normalize referral hospital master data."""
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS referral_hospitals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hospital_name TEXT NOT NULL,
+                department TEXT,
+                contact_person TEXT,
+                phone TEXT,
+                email TEXT,
+                address TEXT,
+                is_active INTEGER DEFAULT 1,
+                is_default INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+
+        cur.execute("PRAGMA table_info(referral_hospitals)")
+        existing_columns = {row[1] for row in cur.fetchall()}
+        for column_name, column_type in UserManager._REFERRAL_HOSPITAL_COLUMNS.items():
+            if column_name in existing_columns:
+                continue
+            cur.execute(
+                f"ALTER TABLE referral_hospitals ADD COLUMN {column_name} {column_type}"
+            )
+
+    @staticmethod
+    def _ensure_activity_log_columns(conn: sqlite3.Connection) -> None:
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(activity_logs)")
+        existing_columns = {row[1] for row in cur.fetchall()}
+        for column_name, column_type in UserManager._ACTIVITY_LOG_COLUMNS.items():
+            if column_name in existing_columns:
+                continue
+            cur.execute(f"ALTER TABLE activity_logs ADD COLUMN {column_name} {column_type}")
+
+    @staticmethod
+    def ensure_referral_hospitals_table() -> bool:
+        conn = get_connection()
+        try:
+            UserManager._ensure_referral_hospitals_table(conn)
+            conn.commit()
+            success = True
+        except sqlite3.Error:
+            success = False
+        conn.close()
+        return success
+
+    @staticmethod
+    def list_referral_hospitals(active_only: bool = False) -> list[dict]:
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            UserManager._ensure_referral_hospitals_table(conn)
+            if active_only:
+                cur.execute(
+                    """
+                    SELECT id, hospital_name, department, contact_person, phone, email, address, is_active, is_default, created_at, updated_at
+                    FROM referral_hospitals
+                    WHERE is_active = 1
+                    ORDER BY is_default DESC, hospital_name COLLATE NOCASE ASC
+                    """
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id, hospital_name, department, contact_person, phone, email, address, is_active, is_default, created_at, updated_at
+                    FROM referral_hospitals
+                    ORDER BY is_default DESC, hospital_name COLLATE NOCASE ASC
+                    """
+                )
+            rows = cur.fetchall()
+        except sqlite3.Error:
+            rows = []
+        conn.close()
+
+        return [
+            {
+                "id": row[0],
+                "hospital_name": row[1] or "",
+                "department": row[2] or "",
+                "contact_person": row[3] or "",
+                "phone": row[4] or "",
+                "email": row[5] or "",
+                "address": row[6] or "",
+                "is_active": bool(row[7]),
+                "is_default": bool(row[8]),
+                "created_at": row[9] or "",
+                "updated_at": row[10] or "",
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def upsert_referral_hospital(
+        hospital_name: str,
+        department: str = "",
+        contact_person: str = "",
+        phone: str = "",
+        email: str = "",
+        address: str = "",
+        is_active: bool = True,
+        is_default: bool = False,
+        hospital_id: Optional[int] = None,
+    ) -> tuple[bool, str, Optional[int]]:
+        clean_name = str(hospital_name or "").strip()
+        if not clean_name:
+            return False, "Hospital name is required.", None
+
+        now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            UserManager._ensure_referral_hospitals_table(conn)
+
+            if hospital_id:
+                cur.execute(
+                    """
+                    UPDATE referral_hospitals
+                    SET hospital_name = ?, department = ?, contact_person = ?, phone = ?, email = ?, address = ?,
+                        is_active = ?, is_default = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        clean_name,
+                        str(department or "").strip(),
+                        str(contact_person or "").strip(),
+                        str(phone or "").strip(),
+                        str(email or "").strip(),
+                        str(address or "").strip(),
+                        1 if is_active else 0,
+                        1 if is_default else 0,
+                        now_text,
+                        int(hospital_id),
+                    ),
+                )
+                if cur.rowcount <= 0:
+                    conn.close()
+                    return False, "Trusted hospital was not found.", None
+                target_id = int(hospital_id)
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO referral_hospitals (
+                        hospital_name, department, contact_person, phone, email, address,
+                        is_active, is_default, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        clean_name,
+                        str(department or "").strip(),
+                        str(contact_person or "").strip(),
+                        str(phone or "").strip(),
+                        str(email or "").strip(),
+                        str(address or "").strip(),
+                        1 if is_active else 0,
+                        1 if is_default else 0,
+                        now_text,
+                        now_text,
+                    ),
+                )
+                target_id = int(cur.lastrowid)
+
+            if is_default:
+                cur.execute(
+                    "UPDATE referral_hospitals SET is_default = 0 WHERE id <> ?",
+                    (target_id,),
+                )
+
+            if is_active:
+                cur.execute(
+                    "UPDATE referral_hospitals SET is_active = 1 WHERE id = ?",
+                    (target_id,),
+                )
+
+            conn.commit()
+        except sqlite3.Error as err:
+            conn.close()
+            return False, f"Unable to save trusted hospital: {err}", None
+
+        conn.close()
+        return True, "Trusted hospital saved.", target_id
+
+    @staticmethod
+    def delete_referral_hospital(hospital_id: int) -> tuple[bool, str]:
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            UserManager._ensure_referral_hospitals_table(conn)
+            cur.execute("SELECT is_default FROM referral_hospitals WHERE id = ?", (int(hospital_id),))
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return False, "Trusted hospital was not found."
+
+            deleting_default = bool(row[0])
+            cur.execute("DELETE FROM referral_hospitals WHERE id = ?", (int(hospital_id),))
+            if cur.rowcount <= 0:
+                conn.close()
+                return False, "Trusted hospital was not found."
+
+            if deleting_default:
+                cur.execute(
+                    """
+                    UPDATE referral_hospitals
+                    SET is_default = 1
+                    WHERE id = (
+                        SELECT id FROM referral_hospitals
+                        WHERE is_active = 1
+                        ORDER BY hospital_name COLLATE NOCASE ASC
+                        LIMIT 1
+                    )
+                    """
+                )
+
+            conn.commit()
+        except sqlite3.Error as err:
+            conn.close()
+            return False, f"Unable to delete trusted hospital: {err}"
+
+        conn.close()
+        return True, "Trusted hospital deleted."
+
+    @staticmethod
     def _migrate_users_json(conn: sqlite3.Connection) -> None:
         """Migrate legacy JSON users into SQLite (one-time safe import)."""
-        json_path = os.path.join(os.path.dirname(__file__), "users_data.json")
+        json_path = os.path.join(os.path.dirname(__file__), "config", "users_data.json")
         if not os.path.exists(json_path):
             return
 
@@ -448,6 +741,201 @@ class UserManager:
         if stored_role != ADMIN_ROLE:
             return False
         return PasswordManager.verify_password(acting_password, password_hash)
+
+    @staticmethod
+    def _verify_admin_identity(
+        conn: sqlite3.Connection,
+        acting_username: Optional[str],
+        acting_role: Optional[str],
+    ) -> bool:
+        if acting_role != ADMIN_ROLE or not acting_username:
+            return False
+        cur = conn.cursor()
+        cur.execute("SELECT role FROM users WHERE username = ?", (acting_username,))
+        row = cur.fetchone()
+        return bool(row and row[0] == ADMIN_ROLE)
+
+    @staticmethod
+    def _utc_now_iso() -> str:
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _settings_data_path() -> str:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "settings_data.json")
+
+    @staticmethod
+    def _clamp_timeout_minutes(value: Any, default: int = 15) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = int(default)
+        return max(1, min(240, parsed))
+
+    @staticmethod
+    def _load_global_inactivity_policy() -> tuple[bool, int]:
+        enabled = True
+        timeout_minutes = 15
+        path = UserManager._settings_data_path()
+        if not os.path.exists(path):
+            return enabled, timeout_minutes
+        try:
+            with open(path, "r", encoding="utf-8") as file:
+                loaded = json.load(file)
+            if isinstance(loaded, dict):
+                enabled = bool(loaded.get("auto_logout_enabled", True))
+                timeout_minutes = UserManager._clamp_timeout_minutes(
+                    loaded.get("inactivity_timeout_minutes", 15),
+                    default=15,
+                )
+        except (OSError, json.JSONDecodeError):
+            pass
+        return enabled, timeout_minutes
+
+    @staticmethod
+    def _normalize_action_time(action_time: Optional[str]) -> str:
+        text = str(action_time or "").strip()
+        if not text:
+            return UserManager._utc_now_iso()
+        parsed: Optional[datetime] = None
+        with contextlib.suppress(ValueError):
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed is None:
+            with contextlib.suppress(ValueError):
+                parsed = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+        if parsed is None:
+            with contextlib.suppress(ValueError):
+                parsed = datetime.strptime(text, "%Y-%m-%d")
+        if parsed is None:
+            return UserManager._utc_now_iso()
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+        return parsed.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _normalize_event_type(value: Optional[str]) -> str:
+        text = str(value or "").strip().upper()
+        if not text:
+            return "LEGACY"
+        return text
+
+    @staticmethod
+    def _normalize_metadata_json(metadata: Optional[dict[str, Any] | str]) -> str:
+        if metadata is None:
+            return ""
+        if isinstance(metadata, str):
+            metadata_text = metadata.strip()
+            if not metadata_text:
+                return ""
+            try:
+                parsed = json.loads(metadata_text)
+                if isinstance(parsed, dict):
+                    return json.dumps(parsed, ensure_ascii=True, separators=(",", ":"))
+            except json.JSONDecodeError:
+                return ""
+            return ""
+        if isinstance(metadata, dict):
+            return json.dumps(metadata, ensure_ascii=True, separators=(",", ":"))
+        return ""
+
+    @staticmethod
+    def _parse_legacy_action_details(text: str) -> dict[str, str]:
+        payload = ""
+        if " " in text:
+            payload = text.split(" ", 1)[1]
+        details: dict[str, str] = {}
+        for token in str(payload or "").split(";"):
+            piece = token.strip()
+            if not piece or "=" not in piece:
+                continue
+            key, value = piece.split("=", 1)
+            details[key.strip().lower()] = value.strip()
+        return details
+
+    @staticmethod
+    def _infer_event_from_legacy_action(action: str) -> tuple[str, dict[str, Any], str]:
+        text = str(action or "").strip()
+        if not text:
+            return "LEGACY", {}, ""
+
+        lowered = text.lower()
+        if lowered == "login":
+            return "LOGIN", {}, text
+        if lowered == "logout":
+            return "LOGOUT", {}, text
+
+        prefix = text.split(" ", 1)[0].strip().upper()
+        if prefix in {
+            "ACCOUNT_CREATED",
+            "ACCOUNT_DELETED",
+            "ROLE_CHANGED",
+            "PASSWORD_RESET",
+            "USER_STATUS_CHANGED",
+            "USER_AVAILABILITY_UPDATED",
+            "SCREENED_PATIENT",
+            "RECORD_OPENED",
+            "RECORD_ARCHIVED",
+            "RECORD_RESTORED",
+            "REPORT_EXPORT_CSV",
+            "REPORT_GENERATED",
+            "REFERRAL_GENERATED",
+            "ACTIVITY_LOG_EXPORT_CSV",
+        }:
+            details = UserManager._parse_legacy_action_details(text)
+            return prefix, details, text
+
+        if lowered.startswith("assigned referral "):
+            body = text[len("Assigned referral "):].strip()
+            referral_id = body
+            assignee = ""
+            if " to " in body:
+                referral_id, assignee = body.split(" to ", 1)
+            metadata = {
+                "referral_id": referral_id.strip(),
+                "assigned_to": assignee.strip(),
+            }
+            return "REFERRAL_ASSIGNED", metadata, text
+
+        if lowered.startswith("reassigned referral "):
+            body = text[len("Reassigned referral "):].strip()
+            referral_id = body
+            assignee = ""
+            if " to " in body:
+                referral_id, assignee = body.split(" to ", 1)
+            metadata = {
+                "referral_id": referral_id.strip(),
+                "assigned_to": assignee.strip(),
+            }
+            return "REFERRAL_REASSIGNED", metadata, text
+
+        if lowered.startswith("updated referral note "):
+            referral_id = text[len("Updated referral note "):].strip()
+            return "REFERRAL_NOTE_UPDATED", {"referral_id": referral_id}, text
+
+        if lowered.startswith("updated referral "):
+            body = text[len("Updated referral "):].strip()
+            referral_id = body
+            from_status = ""
+            to_status = ""
+            if ":" in body:
+                referral_id, transition = body.split(":", 1)
+                if "->" in transition:
+                    left, right = transition.split("->", 1)
+                    from_status = left.strip()
+                    to_status = right.strip()
+            metadata = {
+                "referral_id": referral_id.strip(),
+                "from_status": from_status,
+                "to_status": to_status,
+            }
+            return "REFERRAL_STATUS_UPDATED", metadata, text
+
+        if lowered.startswith("generated external referral letter "):
+            referral_id = text[len("Generated external referral letter "):].strip()
+            return "EXTERNAL_REFERRAL_LETTER_GENERATED", {"referral_id": referral_id}, text
+
+        return "LEGACY", {"raw_action": text}, text
     
     @staticmethod
     def create_user(
@@ -509,9 +997,10 @@ class UserManager:
                     contact,
                     specialization,
                     availability_json,
+                    is_active,
                     password_hash,
                     role
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """,
                 (
                     username,
@@ -541,7 +1030,7 @@ class UserManager:
         conn = get_connection()
         cur = conn.cursor()
         
-        cur.execute("SELECT id, password_hash, role FROM users WHERE username = ?", (username,))
+        cur.execute("SELECT id, password_hash, role, is_active FROM users WHERE username = ?", (username,))
         
         row = cur.fetchone()
         
@@ -549,7 +1038,10 @@ class UserManager:
             conn.close()
             return None
         
-        user_id, pw_hash, role = row
+        user_id, pw_hash, role, is_active = row
+        if int(is_active or 0) != 1:
+            conn.close()
+            return None
         
         if PasswordManager.verify_password(password, pw_hash):
             if PasswordManager.needs_upgrade(pw_hash):
@@ -577,7 +1069,7 @@ class UserManager:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT username, full_name, display_name, contact, specialization, availability_json, role
+            SELECT username, full_name, display_name, contact, specialization, availability_json, preferred_timeout_minutes, role, is_active
             FROM users
             WHERE username = ?
             """,
@@ -594,7 +1086,43 @@ class UserManager:
             "contact": row[3] or "",
             "specialization": row[4] or "",
             "availability_json": row[5] or "",
-            "role": row[6],
+            "preferred_timeout_minutes": row[6],
+            "role": row[7],
+            "is_active": bool(row[8]),
+        }
+
+    @staticmethod
+    def get_inactivity_policy(username: str) -> dict[str, Any]:
+        username = str(username or "").strip()
+        global_enabled, default_minutes = UserManager._load_global_inactivity_policy()
+        user_minutes: Optional[int] = None
+
+        if username:
+            conn = get_connection()
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    "SELECT preferred_timeout_minutes FROM users WHERE username = ?",
+                    (username,),
+                )
+                row = cur.fetchone()
+                if row:
+                    raw_user_minutes = row[0]
+                    if raw_user_minutes is not None:
+                        user_minutes = UserManager._clamp_timeout_minutes(raw_user_minutes, default=default_minutes)
+            except sqlite3.Error:
+                user_minutes = None
+            conn.close()
+
+        effective_minutes = default_minutes
+        if user_minutes is not None:
+            effective_minutes = min(default_minutes, user_minutes)
+
+        return {
+            "enabled": bool(global_enabled),
+            "default_minutes": int(default_minutes),
+            "user_minutes": user_minutes,
+            "effective_minutes": int(effective_minutes),
         }
     
     @staticmethod
@@ -603,7 +1131,9 @@ class UserManager:
         conn = get_connection()
         cur = conn.cursor()
         
-        cur.execute("SELECT username, full_name, display_name, contact, specialization, availability_json, role FROM users")
+        cur.execute(
+            "SELECT username, full_name, display_name, contact, specialization, availability_json, role, is_active FROM users"
+        )
         users = cur.fetchall()
         
         conn.close()
@@ -615,6 +1145,7 @@ class UserManager:
         new_role: str,
         acting_username: Optional[str] = None,
         acting_role: Optional[str] = None,
+        acting_password: Optional[str] = None,
     ) -> bool:
         """Update a user's role"""
         normalized_role = UserManager._normalize_role(new_role)
@@ -628,6 +1159,10 @@ class UserManager:
         conn = get_connection()
         cur = conn.cursor()
 
+        if not UserManager._verify_admin_actor(conn, acting_username, acting_role, acting_password):
+            conn.close()
+            return False
+
         current_role = UserManager._get_user_role(conn, username)
         if current_role is None:
             conn.close()
@@ -636,6 +1171,10 @@ class UserManager:
         if current_role == normalized_role:
             conn.close()
             return True
+
+        if acting_username and username.lower() == acting_username.strip().lower():
+            conn.close()
+            return False
 
         if current_role == ADMIN_ROLE and normalized_role != ADMIN_ROLE and UserManager._count_admins(conn) <= 1:
             conn.close()
@@ -669,6 +1208,7 @@ class UserManager:
         username: str,
         acting_username: Optional[str] = None,
         acting_role: Optional[str] = None,
+        acting_password: Optional[str] = None,
     ) -> bool:
         """Delete a user"""
         username = username.strip()
@@ -678,8 +1218,16 @@ class UserManager:
         conn = get_connection()
         cur = conn.cursor()
 
+        if not UserManager._verify_admin_actor(conn, acting_username, acting_role, acting_password):
+            conn.close()
+            return False
+
         role = UserManager._get_user_role(conn, username)
         if role is None:
+            conn.close()
+            return False
+
+        if role == ADMIN_ROLE and acting_username and username.strip().lower() != acting_username.strip().lower():
             conn.close()
             return False
 
@@ -703,6 +1251,7 @@ class UserManager:
         new_password: str,
         acting_username: Optional[str] = None,
         acting_role: Optional[str] = None,
+        acting_password: Optional[str] = None,
     ) -> bool:
         """Reset a user's password"""
         username = username.strip()
@@ -715,6 +1264,10 @@ class UserManager:
 
         conn = get_connection()
         cur = conn.cursor()
+
+        if not UserManager._verify_admin_actor(conn, acting_username, acting_role, acting_password):
+            conn.close()
+            return False
 
         pw_hash = PasswordManager.hash_password(new_password)
 
@@ -737,6 +1290,7 @@ class UserManager:
         availability_json: str,
         acting_username: Optional[str] = None,
         acting_role: Optional[str] = None,
+        acting_password: Optional[str] = None,
     ) -> bool:
         username = username.strip()
         if not username or not UserManager._can_manage_users(acting_role):
@@ -744,6 +1298,11 @@ class UserManager:
 
         conn = get_connection()
         cur = conn.cursor()
+
+        if not UserManager._verify_admin_actor(conn, acting_username, acting_role, acting_password):
+            conn.close()
+            return False
+
         try:
             cur.execute(
                 "UPDATE users SET availability_json = ? WHERE username = ?",
@@ -778,8 +1337,64 @@ class UserManager:
         if not success:
             return False, "Could not update your schedule."
 
-        UserManager.add_activity_log(username, "Availability Updated")
+        UserManager.add_activity_event(
+            username=username,
+            event_type="USER_AVAILABILITY_UPDATED",
+            metadata={"target": username, "scope": "self"},
+            action_text="Availability Updated",
+        )
         return True, "Schedule updated successfully."
+
+    @staticmethod
+    def update_own_inactivity_timeout(current_username: str, timeout_minutes: Any) -> tuple[bool, str, int]:
+        username = str(current_username or "").strip()
+        if not username:
+            return False, "User not found.", 15
+
+        global_enabled, default_minutes = UserManager._load_global_inactivity_policy()
+        requested_minutes = UserManager._clamp_timeout_minutes(timeout_minutes, default=default_minutes)
+        effective_minutes = min(default_minutes, requested_minutes)
+        # Store NULL when it matches admin default so fallback remains explicit.
+        stored_value: Optional[int] = effective_minutes if effective_minutes < default_minutes else None
+
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE users SET preferred_timeout_minutes = ? WHERE username = ?",
+                (stored_value, username),
+            )
+            conn.commit()
+            success = cur.rowcount > 0
+        except sqlite3.Error:
+            success = False
+        conn.close()
+
+        if not success:
+            return False, "Could not update your inactivity timeout.", default_minutes
+
+        metadata = {
+            "target": username,
+            "scope": "self",
+            "requested_minutes": requested_minutes,
+            "effective_minutes": effective_minutes,
+            "default_minutes": default_minutes,
+            "auto_logout_enabled": bool(global_enabled),
+        }
+        UserManager.add_activity_event(
+            username=username,
+            event_type="INACTIVITY_TIMEOUT_PREFERENCE_UPDATED",
+            metadata=metadata,
+            action_text="Inactivity timeout preference updated",
+        )
+
+        if requested_minutes > default_minutes:
+            return (
+                True,
+                f"Saved. Your timeout was capped to {default_minutes} minute(s) by admin policy.",
+                effective_minutes,
+            )
+        return True, "Inactivity timeout preference updated.", effective_minutes
 
     @staticmethod
     def update_own_account(
@@ -858,23 +1473,40 @@ class UserManager:
         if not success:
             return False, "No account changes were applied.", None
 
-        UserManager.add_activity_log(target_username, "Profile updated")
+        UserManager.add_activity_event(
+            username=target_username,
+            event_type="PROFILE_UPDATED",
+            metadata={"target": target_username},
+            action_text="Profile updated",
+        )
         return True, "Account updated successfully.", target_username
 
     @staticmethod
-    def add_activity_log(username: str, action: str, action_time: Optional[str] = None) -> bool:
-        username = str(username or "").strip()
-        action = str(action or "").strip()
-        if not username or not action:
+    def add_activity_event(
+        username: str,
+        event_type: str,
+        metadata: Optional[dict[str, Any] | str] = None,
+        action_time: Optional[str] = None,
+        action_text: Optional[str] = None,
+    ) -> bool:
+        actor = str(username or "").strip()
+        normalized_event = UserManager._normalize_event_type(event_type)
+        metadata_json = UserManager._normalize_metadata_json(metadata)
+        text = str(action_text or "").strip() or normalized_event
+        if not actor or not text:
             return False
 
-        timestamp = str(action_time or "").strip() or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = UserManager._normalize_action_time(action_time)
         conn = get_connection()
         cur = conn.cursor()
         try:
+            UserManager._ensure_activity_log_columns(conn)
             cur.execute(
-                "INSERT INTO activity_logs (username, action, action_time) VALUES (?, ?, ?)",
-                (username, action, timestamp),
+                """
+                INSERT INTO activity_logs (username, action, action_time, event_type, metadata_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (actor, text, timestamp, normalized_event, metadata_json),
             )
             conn.commit()
             success = True
@@ -884,21 +1516,381 @@ class UserManager:
         return success
 
     @staticmethod
-    def get_recent_activity(limit: int = 120) -> list[tuple]:
-        safe_limit = max(1, min(int(limit), 500))
+    def add_activity_log(username: str, action: str, action_time: Optional[str] = None) -> bool:
+        username = str(username or "").strip()
+        action = str(action or "").strip()
+        if not username or not action:
+            return False
+        event_type, metadata, normalized_text = UserManager._infer_event_from_legacy_action(action)
+        return UserManager.add_activity_event(
+            username=username,
+            event_type=event_type,
+            metadata=metadata,
+            action_time=action_time,
+            action_text=normalized_text,
+        )
+
+    @staticmethod
+    def get_activity_logs(
+        from_time: Optional[str] = None,
+        to_time: Optional[str] = None,
+        query: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+        event_type: Optional[str] = None,
+        username: Optional[str] = None,
+        acting_username: Optional[str] = None,
+        acting_role: Optional[str] = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        safe_limit = max(1, min(int(limit), MAX_ACTIVITY_QUERY_LIMIT))
+        safe_offset = max(0, int(offset))
+        where_parts: list[str] = []
+        params: list[Any] = []
+
+        from_text = str(from_time or "").strip()
+        to_text = str(to_time or "").strip()
+        query_text = str(query or "").strip().lower()
+        username_text = str(username or "").strip()
+        event_text = str(event_type or "").strip().upper()
+
+        if from_text:
+            if len(from_text) == 10:
+                where_parts.append(
+                    "COALESCE(date(action_time, 'localtime'), SUBSTR(action_time, 1, 10)) >= ?"
+                )
+            else:
+                where_parts.append("action_time >= ?")
+            params.append(from_text)
+        if to_text:
+            if len(to_text) == 10:
+                where_parts.append(
+                    "COALESCE(date(action_time, 'localtime'), SUBSTR(action_time, 1, 10)) <= ?"
+                )
+            else:
+                where_parts.append("action_time <= ?")
+            params.append(to_text)
+        if username_text:
+            where_parts.append("username = ?")
+            params.append(username_text)
+        if event_text:
+            where_parts.append("event_type = ?")
+            params.append(event_text)
+        if query_text:
+            where_parts.append(
+                "(" 
+                "LOWER(username) LIKE ? OR "
+                "LOWER(action) LIKE ? OR "
+                "LOWER(COALESCE(event_type, '')) LIKE ? OR "
+                "LOWER(COALESCE(metadata_json, '')) LIKE ?"
+                ")"
+            )
+            like_term = f"%{query_text}%"
+            params.extend([like_term, like_term, like_term, like_term])
+
+        where_sql = ""
+        if where_parts:
+            where_sql = "WHERE " + " AND ".join(where_parts)
+
         conn = get_connection()
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT username, action, action_time
-            FROM activity_logs
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (safe_limit,),
-        )
-        rows = cur.fetchall()
+        try:
+            UserManager._ensure_activity_log_columns(conn)
+            if not UserManager._verify_admin_identity(conn, acting_username, acting_role):
+                conn.close()
+                return [], 0
+            cur.execute(
+                f"SELECT COUNT(*) FROM activity_logs {where_sql}",
+                tuple(params),
+            )
+            total = int((cur.fetchone() or [0])[0])
+
+            cur.execute(
+                f"""
+                SELECT username, action, action_time, COALESCE(event_type, 'LEGACY'), COALESCE(metadata_json, '')
+                FROM activity_logs
+                {where_sql}
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params + [safe_limit, safe_offset]),
+            )
+            rows = cur.fetchall()
+        except sqlite3.Error:
+            conn.close()
+            return [], 0
         conn.close()
-        return rows
+
+        entries: list[dict[str, Any]] = []
+        for row in rows:
+            metadata_raw = str(row[4] or "").strip()
+            metadata_value: dict[str, Any] = {}
+            if metadata_raw:
+                try:
+                    parsed = json.loads(metadata_raw)
+                    if isinstance(parsed, dict):
+                        metadata_value = parsed
+                except json.JSONDecodeError:
+                    metadata_value = {}
+            entries.append(
+                {
+                    "username": str(row[0] or "").strip(),
+                    "action": str(row[1] or "").strip(),
+                    "time": str(row[2] or "").strip(),
+                    "event_type": str(row[3] or "LEGACY").strip().upper() or "LEGACY",
+                    "metadata": metadata_value,
+                }
+            )
+        return entries, total
+
+    @staticmethod
+    def get_recent_activity(limit: int = 120) -> list[tuple]:
+        entries, _total = UserManager.get_activity_logs(limit=limit, offset=0)
+        return [
+            (entry.get("username", ""), entry.get("action", ""), entry.get("time", ""))
+            for entry in entries
+        ]
+
+    @staticmethod
+    def assign_referral(
+        referral_id: str,
+        assigned_to_username: str,
+        assigned_by_username: str,
+        patient_name: str = "",
+        urgency: str = "normal",
+        notes: str = "",
+    ) -> bool:
+        """Assign a referral to a specific clinician."""
+        return ReferralService.assign_referral(
+            get_connection=get_connection,
+            add_activity_log=UserManager.add_activity_log,
+            referral_id=referral_id,
+            assigned_to_username=assigned_to_username,
+            assigned_by_username=assigned_by_username,
+            patient_name=patient_name,
+            urgency=urgency,
+            notes=notes,
+        )
+
+    @staticmethod
+    def get_pending_referrals(username: str) -> list[dict]:
+        """Get pending and actionable referrals for a clinician."""
+        return ReferralService.get_pending_referrals(get_connection=get_connection, username=username)
+
+    @staticmethod
+    def get_user_referrals(username: str, limit: int = 100) -> list[dict]:
+        """Get referral activity that is private to a user."""
+        return ReferralService.get_user_referrals(get_connection=get_connection, username=username, limit=limit)
+
+    @staticmethod
+    def get_referral_count(username: str, status: str = "pending") -> int:
+        """Get referral count for a clinician by status."""
+        return ReferralService.get_referral_count(get_connection=get_connection, username=username, status=status)
+
+    @staticmethod
+    def update_referral_status(referral_id: str, new_status: str, actor_username: str = "") -> bool:
+        """Update referral status with transition validation and audit trail."""
+        return ReferralService.update_referral_status(
+            get_connection=get_connection,
+            add_activity_log=UserManager.add_activity_log,
+            referral_id=referral_id,
+            new_status=new_status,
+            actor_username=actor_username,
+        )
+
+    @staticmethod
+    def append_referral_note(referral_id: str, actor_username: str, note: str) -> bool:
+        """Append a timestamped note to a referral record."""
+        return ReferralService.append_referral_note(
+            get_connection=get_connection,
+            add_activity_log=UserManager.add_activity_log,
+            referral_id=referral_id,
+            actor_username=actor_username,
+            note=note,
+        )
+
+    @staticmethod
+    def list_clinicians(exclude_username: str = "") -> list[dict]:
+        """Return active clinician accounts for assignment/reassignment."""
+        excluded = str(exclude_username or "").strip()
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                SELECT username, full_name, display_name, specialization
+                FROM users
+                WHERE role = 'clinician' AND is_active = 1
+                ORDER BY COALESCE(display_name, full_name, username) COLLATE NOCASE ASC
+                """
+            )
+            rows = cur.fetchall()
+        except sqlite3.Error:
+            rows = []
+        conn.close()
+
+        clinicians = []
+        for row in rows:
+            username = str(row[0] or "").strip()
+            if not username or (excluded and username == excluded):
+                continue
+            display_name = str(row[2] or row[1] or username).strip()
+            clinicians.append(
+                {
+                    "username": username,
+                    "display_name": display_name,
+                    "specialization": str(row[3] or "").strip(),
+                }
+            )
+        return clinicians
+
+    @staticmethod
+    def reassign_referral(
+        referral_id: str,
+        new_assignee_username: str,
+        acting_username: str,
+        reason: str = "",
+        reason_code: str = "",
+    ) -> bool:
+        """Reassign referral to another clinician and preserve audit note."""
+        return ReferralService.reassign_referral(
+            get_connection=get_connection,
+            add_activity_log=UserManager.add_activity_log,
+            referral_id=referral_id,
+            new_assignee_username=new_assignee_username,
+            acting_username=acting_username,
+            reason=reason,
+            reason_code=reason_code,
+        )
+
+    @staticmethod
+    def get_unread_referral_notifications(username: str, limit: int = 30) -> list[dict]:
+        """Return unread referral notifications for a user."""
+        return ReferralService.get_unread_notifications(get_connection=get_connection, username=username, limit=limit)
+
+    @staticmethod
+    def mark_referral_notification_read(notification_id: int, username: str) -> bool:
+        """Mark a referral notification as read."""
+        return ReferralService.mark_notification_read(
+            get_connection=get_connection,
+            notification_id=notification_id,
+            username=username,
+        )
+
+    @staticmethod
+    def log_external_referral_letter(
+        referral_id: str,
+        actor_username: str,
+        patient_name: str,
+        destination_name: str,
+        destination_department: str,
+        destination_contact: str,
+        urgency: str,
+        pdf_path: str,
+    ) -> bool:
+        """Persist audit event for generated external referral letter."""
+        return ReferralService.log_external_referral_letter(
+            get_connection=get_connection,
+            add_activity_log=UserManager.add_activity_log,
+            referral_id=referral_id,
+            actor_username=actor_username,
+            patient_name=patient_name,
+            destination_name=destination_name,
+            destination_department=destination_department,
+            destination_contact=destination_contact,
+            urgency=urgency,
+            pdf_path=pdf_path,
+        )
+
+    @staticmethod
+    def update_user_active_status(
+        username: str,
+        is_active: bool,
+        acting_username: Optional[str] = None,
+        acting_role: Optional[str] = None,
+        acting_password: Optional[str] = None,
+    ) -> bool:
+        """Activate or deactivate a user account."""
+        target = str(username or "").strip()
+        if not target:
+            return False
+        if not UserManager._can_manage_users(acting_role):
+            return False
+
+        conn = get_connection()
+        cur = conn.cursor()
+
+        if not UserManager._verify_admin_actor(conn, acting_username, acting_role, acting_password):
+            conn.close()
+            return False
+
+        try:
+            cur.execute("SELECT role FROM users WHERE username = ?", (target,))
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return False
+
+            role = str(row[0] or "").strip().lower()
+            desired = 1 if bool(is_active) else 0
+
+            if role == ADMIN_ROLE and desired == 0:
+                cur.execute("SELECT COUNT(*) FROM users WHERE role = ? AND is_active = 1", (ADMIN_ROLE,))
+                active_admins = int((cur.fetchone() or [0])[0])
+                if active_admins <= 1:
+                    conn.close()
+                    return False
+
+            cur.execute("UPDATE users SET is_active = ? WHERE username = ?", (desired, target))
+            conn.commit()
+            success = cur.rowcount > 0
+        except sqlite3.Error:
+            success = False
+        conn.close()
+        return success
+
+    @staticmethod
+    def get_referral_reason_taxonomy() -> dict:
+        return {
+            "reassignment": dict(ReferralService.REASSIGNMENT_REASONS),
+            "completion": dict(ReferralService.COMPLETION_REASONS),
+        }
+
+    @staticmethod
+    def get_referral_notifications(username: str, include_read: bool = False, limit: int = 100) -> list[dict]:
+        return ReferralService.get_notifications(
+            get_connection=get_connection,
+            username=username,
+            include_read=include_read,
+            limit=limit,
+        )
+
+    @staticmethod
+    def mark_all_referral_notifications_read(username: str) -> int:
+        return ReferralService.mark_all_notifications_read(
+            get_connection=get_connection,
+            username=username,
+        )
+
+    @staticmethod
+    def get_referral_kpis(username: str) -> dict:
+        return ReferralService.get_referral_kpis(get_connection=get_connection, username=username)
+
+    @staticmethod
+    def update_referral_status_with_reason(
+        referral_id: str,
+        new_status: str,
+        actor_username: str = "",
+        reason_code: str = "",
+        reason_note: str = "",
+    ) -> bool:
+        return ReferralService.update_referral_status(
+            get_connection=get_connection,
+            add_activity_log=UserManager.add_activity_log,
+            referral_id=referral_id,
+            new_status=new_status,
+            actor_username=actor_username,
+            reason_code=reason_code,
+            reason_note=reason_note,
+        )
 
 

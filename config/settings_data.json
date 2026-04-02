@@ -1,0 +1,7 @@
+{
+  "theme": "Light",
+  "language": "English",
+  "auto_logout_enabled": true,
+  "inactivity_timeout_minutes": 4,
+  "inactivity_warning_seconds": 30
+}

@@ -12,6 +12,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import traceback
 
 from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QLineEdit, QVBoxLayout, QHBoxLayout,
@@ -38,8 +39,9 @@ from screening_results import ResultsWindow
 from logic_improvements import (
     ScreeningFlowGuard,
     DuplicateDetector,
+    DuplicateDialog,
 )
-from auth import DB_FILE
+from auth import DB_FILE, UserManager
 from safety_runtime import get_autosave_draft_path, safe_remove_file, write_activity
 
 
@@ -160,10 +162,11 @@ class DropZoneLabel(QLabel):
 class ModernCalendarDateEdit(QDateEdit):
     """Clean date picker — dropdown arrow only, no separate button panel."""
 
-    def __init__(self, min_date: QDate, max_date: QDate, arrow_icon_path: str, parent=None):
+    def __init__(self, min_date: QDate, max_date: QDate, arrow_icon_path: str, default_date: QDate = None, parent=None):
         super().__init__(parent)
         self._min_date = min_date
         self._max_date = max_date
+        self._default_date = default_date or QDate(2000, 1, 1)
         self._arrow_icon_path = str(arrow_icon_path or "").replace("\\", "/")
 
         self.setDisplayFormat("dd/MM/yyyy")
@@ -171,12 +174,105 @@ class ModernCalendarDateEdit(QDateEdit):
         self.setMinimumDate(min_date)
         self.setMaximumDate(max_date)
         self.setSpecialValueText("")
-        self.setDate(min_date)
+        self.setDate(self._default_date)
 
         cal = QCalendarWidget(self)
         cal.setGridVisible(False)
         cal.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+        cal.setMinimumSize(410, 320)
+        cal.currentPageChanged.connect(self._sync_year_dropdown)
         self.setCalendarWidget(cal)
+
+        # Build the custom year dropdown once the calendar nav is initialized.
+        QTimer.singleShot(0, self._setup_year_dropdown)
+
+    def _setup_year_dropdown(self):
+        cal = self.calendarWidget()
+        if not cal:
+            return
+
+        nav = cal.findChild(QWidget, "qt_calendar_navigationbar")
+        if not nav:
+            QTimer.singleShot(0, self._setup_year_dropdown)
+            return
+
+        year_spin = nav.findChild(QSpinBox, "qt_calendar_yearedit")
+        if not year_spin:
+            return
+
+        year_combo = nav.findChild(QComboBox, "qt_calendar_yearcombo")
+        if year_combo is None:
+            year_combo = QComboBox(nav)
+            year_combo.setObjectName("qt_calendar_yearcombo")
+            year_combo.setMinimumWidth(92)
+            year_combo.setMaxVisibleItems(12)
+            year_combo.setEditable(False)
+            year_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+
+            for year in range(self._min_date.year(), self._max_date.year() + 1):
+                year_combo.addItem(str(year), year)
+
+            year_combo.currentIndexChanged.connect(self._on_year_dropdown_changed)
+
+            nav_layout = nav.layout()
+            if nav_layout is not None:
+                idx = nav_layout.indexOf(year_spin)
+                if idx >= 0:
+                    nav_layout.insertWidget(idx, year_combo)
+                else:
+                    nav_layout.addWidget(year_combo)
+
+        # Hide spinbox so year changes are done from dropdown.
+        year_spin.hide()
+        year_spin.setEnabled(False)
+
+        # Hide the default year text button so only the dropdown is visible.
+        year_button = nav.findChild(QWidget, "qt_calendar_yearbutton")
+        if year_button is not None:
+            year_button.hide()
+            year_button.setEnabled(False)
+        self._sync_year_dropdown()
+
+    def _sync_year_dropdown(self, year: int | None = None, _month: int | None = None):
+        cal = self.calendarWidget()
+        if not cal:
+            return
+
+        if year is None:
+            year = cal.yearShown()
+
+        nav = cal.findChild(QWidget, "qt_calendar_navigationbar")
+        if not nav:
+            return
+
+        year_combo = nav.findChild(QComboBox, "qt_calendar_yearcombo")
+        if not year_combo:
+            return
+
+        idx = year_combo.findData(int(year))
+        if idx >= 0 and year_combo.currentIndex() != idx:
+            prev_state = year_combo.blockSignals(True)
+            year_combo.setCurrentIndex(idx)
+            year_combo.blockSignals(prev_state)
+
+    def _on_year_dropdown_changed(self, index: int):
+        cal = self.calendarWidget()
+        if not cal or index < 0:
+            return
+
+        nav = cal.findChild(QWidget, "qt_calendar_navigationbar")
+        if not nav:
+            return
+
+        year_combo = nav.findChild(QComboBox, "qt_calendar_yearcombo")
+        if not year_combo:
+            return
+
+        year = year_combo.itemData(index)
+        if year is None:
+            return
+
+        cal.setCurrentPage(int(year), cal.monthShown())
 
     def apply_theme(self, dark: bool):
         if dark:
@@ -213,15 +309,17 @@ class ModernCalendarDateEdit(QDateEdit):
             }}
             QDateEdit::drop-down {{
                 subcontrol-origin: padding;
-                subcontrol-position: center right;
-                width: 32px;
-                border: none;
-                background: transparent;
+                subcontrol-position: top right;
+                width: 24px;
+                border-left: 1px solid {border};
+                background: {d_bg};
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
             }}
             QDateEdit::down-arrow {{
                 image: url("{arrow}");
-                width: 13px;
-                height: 9px;
+                width: 10px;
+                height: 10px;
             }}
         """)
 
@@ -303,6 +401,30 @@ class ModernCalendarDateEdit(QDateEdit):
                 border-radius: 5px;
                 padding: 2px 6px;
             }}
+            QCalendarWidget QComboBox#qt_calendar_yearcombo {{
+                background: {c_bg};
+                color: {c_text};
+                border: 1px solid {c_border};
+                border-radius: 5px;
+                padding: 2px 20px 2px 8px;
+                min-width: 76px;
+            }}
+            QCalendarWidget QComboBox#qt_calendar_yearcombo::drop-down {{
+                border: none;
+                width: 18px;
+            }}
+            QCalendarWidget QComboBox#qt_calendar_yearcombo::down-arrow {{
+                image: url("{arrow}");
+                width: 9px;
+                height: 6px;
+            }}
+            QCalendarWidget QComboBox#qt_calendar_yearcombo QAbstractItemView {{
+                background: {menu_bg};
+                color: {c_text};
+                border: 1px solid {c_border};
+                selection-background-color: {sel_bg};
+                selection-color: {sel_fg};
+            }}
 
             /* ── Day grid ── */
             QCalendarWidget QAbstractItemView {{
@@ -318,8 +440,10 @@ class ModernCalendarDateEdit(QDateEdit):
             }}
             QCalendarWidget QTableView {{
                 alternate-background-color: {c_bg};
+                border: none;
             }}
             QCalendarWidget QTableView::item {{
+                border: none;
                 border-radius: 5px;
                 padding: 3px;
                 margin: 1px;
@@ -336,7 +460,10 @@ class ModernCalendarDateEdit(QDateEdit):
                 color: #9aa5b1;
             }}
             QCalendarWidget QTableView::item:today {{
-                border: 1.5px solid {today};
+                border: none;
+                background: {d_bg};
+                color: {c_text};
+                font-weight: 600;
                 border-radius: 5px;
             }}
 
@@ -345,6 +472,8 @@ class ModernCalendarDateEdit(QDateEdit):
                 alternate-background-color: {c_bg};
             }}
         """)
+
+        self._setup_year_dropdown()
 
 
 _REDESIGN_STYLESHEET = """
@@ -364,20 +493,15 @@ QDateEdit {
 QDateEdit::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
-    width:28px;
-    border-left:1px solid #9fb4cc;
-    background:#e8f1ff;
+    width:24px;
+    border-left:1px solid #d3dae3;
+    background:#f6f8fb;
     border-top-right-radius:6px;
     border-bottom-right-radius:6px;
 }
 QDateEdit::down-arrow {
-    image:none;
-    width:0;
-    height:0;
-    border-left:5px solid transparent;
-    border-right:5px solid transparent;
-    border-top:7px solid #3f7ca7;
-    margin-right:7px;
+    width:10px;
+    height:10px;
 }
 QComboBox::drop-down {
     subcontrol-origin: padding;
@@ -389,21 +513,6 @@ QComboBox::drop-down {
     border-bottom-right-radius:6px;
 }
 QComboBox::down-arrow { width:10px; height:10px; }
-QComboBox#sexDropdown, QComboBox#eyeDropdown, QComboBox#diabetesTypeDropdown {
-    padding-right: 34px;
-}
-QComboBox#sexDropdown::drop-down, QComboBox#eyeDropdown::drop-down, QComboBox#diabetesTypeDropdown::drop-down {
-    width: 28px;
-    border-left: 1px solid #9fb4cc;
-    background: #e8f1ff;
-    border-top-right-radius: 6px;
-    border-bottom-right-radius: 6px;
-}
-QComboBox#sexDropdown::down-arrow, QComboBox#eyeDropdown::down-arrow, QComboBox#diabetesTypeDropdown::down-arrow {
-    width: 12px;
-    height: 12px;
-    margin-right: 6px;
-}
 QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width:18px; border:none; background:transparent; }
 QScrollArea { border:none; background:transparent; }
 QScrollBar:vertical { background:#f2f5f8; width:6px; border-radius:3px; }
@@ -436,8 +545,16 @@ class ScreeningPage(QWidget):
         self.patient_counter = 0
         self.min_dob_date = QDate(1900, 1, 1)
         self.max_dob_date = QDate.currentDate()
+        self.default_dob_date = QDate(2000, 1, 1)  # Default calendar view year
+        self._dob_user_selected = False
+        self._dob_programmatic_update = False
         self.last_result_class = "Pending"
         self.last_result_conf = "Pending"
+        self.last_ai_classification = "Pending"
+        self.last_doctor_classification = "Pending"
+        self.last_decision_mode = "pending"
+        self.last_override_justification = ""
+        self.last_doctor_findings = ""
         self._custom_storage_root = ""
         self._last_saved_signature = ""
         self._last_saved_at = ""
@@ -445,6 +562,7 @@ class ScreeningPage(QWidget):
         self._current_eye_saved = False
         self._first_eye_result = None
         self._navigation_locked = False
+        self._rescreen_replace_record_id = None
         self._flow_guard = ScreeningFlowGuard(self)
         self._duplicate_detector = DuplicateDetector()
         self._draft_path = get_autosave_draft_path()
@@ -457,6 +575,20 @@ class ScreeningPage(QWidget):
 
     def is_navigation_locked(self) -> bool:
         return bool(self._navigation_locked)
+
+    def _is_inference_active(self) -> bool:
+        worker = getattr(self, "_worker", None)
+        return bool(worker and hasattr(worker, "isRunning") and worker.isRunning())
+
+    def _guard_busy_action(self, action_name: str = "this action") -> bool:
+        if self.is_navigation_locked() or self._is_inference_active():
+            QMessageBox.information(
+                self,
+                "Screening In Progress",
+                f"Please wait for image analysis to finish before {action_name}.",
+            )
+            return True
+        return False
 
     def _set_navigation_locked(self, locked: bool):
         self._navigation_locked = bool(locked)
@@ -665,10 +797,14 @@ class ScreeningPage(QWidget):
             "icons",
             "dropdown_arrow.svg",
         )
-        self.p_dob = ModernCalendarDateEdit(self.min_dob_date, self.max_dob_date, dob_arrow_icon)
+        self.p_dob = ModernCalendarDateEdit(self.min_dob_date, self.max_dob_date, dob_arrow_icon, self.default_dob_date)
         self._dob_default_style = ""
         self._dob_invalid_style = ""
-        self.p_dob.dateChanged.connect(self.update_age_from_dob)
+        self.p_dob.dateChanged.connect(self._on_dob_date_changed)
+        cal = self.p_dob.calendarWidget()
+        if cal is not None:
+            cal.clicked.connect(self._on_dob_calendar_selected)
+            cal.activated.connect(self._on_dob_calendar_selected)
         self._apply_dob_theme_style()
         c1.addLayout(row2(field("Full Name", self.p_name, "scr_label_name"), field("Date of Birth", self.p_dob, "scr_label_dob")))
 
@@ -691,6 +827,40 @@ class ScreeningPage(QWidget):
 
         self.p_contact = QLineEdit()
         self.p_contact.setPlaceholderText("Phone or Email")
+
+        # Height, Weight, and BMI
+        self.height = QDoubleSpinBox()
+        self.height.setRange(0, 300)
+        self.height.setDecimals(1)
+        self.height.setSuffix(" cm")
+        self.height.setSpecialValueText(" ")
+        self.height.valueChanged.connect(self._calculate_bmi)
+
+        self.weight = QDoubleSpinBox()
+        self.weight.setRange(0, 500)
+        self.weight.setDecimals(1)
+        self.weight.setSuffix(" kg")
+        self.weight.setSpecialValueText(" ")
+        self.weight.valueChanged.connect(self._calculate_bmi)
+
+        self.bmi = QDoubleSpinBox()
+        self.bmi.setRange(0, 100)
+        self.bmi.setDecimals(1)
+        self.bmi.setReadOnly(True)
+        self.bmi.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        self.bmi.setSpecialValueText(" ")
+        self.bmi.setStyleSheet(
+            "QDoubleSpinBox{background:#f6f8fb;color:#475569;border:1.5px solid #d3dae3;border-radius:6px;padding:6px 10px;}"
+        )
+        c1.addLayout(row3(field("Height", self.height), field("Weight", self.weight), field("BMI", self.bmi)))
+
+        # BMI Classification Label
+        self.bmi_classification_label = QLabel(" ")
+        self.bmi_classification_label.setStyleSheet(
+            "QLabel{font-size:10px;font-weight:600;color:#6b7280;margin-top:-4px;margin-left:10px;}"
+        )
+        c1.addWidget(self.bmi_classification_label)
+
         c1.addLayout(field("Contact", self.p_contact, "scr_label_contact"))
 
         sep = QFrame()
@@ -799,7 +969,21 @@ class ScreeningPage(QWidget):
         self.hba1c_warn_label.hide()
         c2.addWidget(self.hba1c_warn_label)
 
-        self.prev_treatment = QCheckBox("Previous DR Treatment")
+        # Treatment regimen dropdown
+        self.treatment_regimen = QComboBox()
+        self.treatment_regimen.setObjectName("treatmentRegimenDropdown")
+        self.treatment_regimen.addItems(["Select", "Insulin only", "Oral medications only", "Insulin + Oral medications", "Diet control only", "None/Unknown"])
+        self._apply_visible_dropdown_style(self.treatment_regimen)
+        c2.addLayout(field("Treatment Regimen", self.treatment_regimen, "scr_label_treatment"))
+
+        # Previous DR stage dropdown
+        self.prev_dr_stage = QComboBox()
+        self.prev_dr_stage.setObjectName("prevDRStageDropdown")
+        self.prev_dr_stage.addItems(["Select", "No previous DR", "Mild NPDR", "Moderate NPDR", "Severe NPDR", "PDR (Proliferative)", "Unknown"])
+        self._apply_visible_dropdown_style(self.prev_dr_stage)
+        c2.addLayout(field("Previous DR Stage", self.prev_dr_stage, "scr_label_prev_dr"))
+
+        self.prev_treatment = QCheckBox("Previous DR Treatment (Laser/Injection)")
         c2.addWidget(self.prev_treatment)
         self.notes = QTextEdit()
         self.notes.setPlaceholderText("Enter clinical notes…")
@@ -839,6 +1023,17 @@ class ScreeningPage(QWidget):
             self.btn_upload.setIcon(self._tinted_icon(upload_icon, "#ffffff", 18))
             self.btn_upload.setIconSize(QSize(18, 18))
         self.btn_upload.clicked.connect(self.upload_image)
+
+        self.btn_take_picture = QPushButton("Take Picture")
+        self.btn_take_picture.setObjectName("btnPrimary")
+        self.btn_take_picture.setMinimumHeight(36)
+        self.btn_take_picture.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        camera_icon = self._resolve_icon_path("camera.svg")
+        if camera_icon:
+            self.btn_take_picture.setIcon(self._tinted_icon(camera_icon, "#ffffff", 18))
+            self.btn_take_picture.setIconSize(QSize(18, 18))
+        self.btn_take_picture.clicked.connect(self.take_picture_for_screening)
+
         self.btn_clear = QPushButton("Clear")
         self.btn_clear.setObjectName("btnDanger")
         self.btn_clear.setMinimumHeight(36)
@@ -849,6 +1044,7 @@ class ScreeningPage(QWidget):
             self.btn_clear.setIconSize(QSize(18, 18))
         self.btn_clear.clicked.connect(self.clear_image)
         btn_row.addWidget(self.btn_upload)
+        btn_row.addWidget(self.btn_take_picture)
         btn_row.addWidget(self.btn_clear)
         c3.addLayout(btn_row)
 
@@ -945,7 +1141,8 @@ class ScreeningPage(QWidget):
         self.setTabOrder(self.symptom_flashes, self.symptom_vision_loss)
         self.setTabOrder(self.symptom_vision_loss, self.symptom_other)
         self.setTabOrder(self.symptom_other, self.btn_upload)
-        self.setTabOrder(self.btn_upload, self.btn_clear)
+        self.setTabOrder(self.btn_upload, self.btn_take_picture)
+        self.setTabOrder(self.btn_take_picture, self.btn_clear)
         self.setTabOrder(self.btn_clear, self.btn_analyze)
 
     def _setup_validators(self):
@@ -989,6 +1186,10 @@ class ScreeningPage(QWidget):
             )
             return False
 
+        if isinstance(self.p_dob, QDateEdit) and not self._dob_user_selected:
+            QMessageBox.warning(self, "Missing Information", "Please select the patient's actual date of birth.")
+            return False
+
         if not self.name_regex.match(name).hasMatch():
             QMessageBox.warning(self, "Error", "Name can only include letters, spaces, hyphens, and apostrophes")
             return False
@@ -1004,6 +1205,41 @@ class ScreeningPage(QWidget):
             self.hba1c_warn_label.show()
         else:
             self.hba1c_warn_label.hide()
+
+    def _calculate_bmi(self):
+        """Auto-calculate BMI when height or weight changes."""
+        height_cm = self.height.value()
+        weight_kg = self.weight.value()
+        
+        if height_cm > 0 and weight_kg > 0:
+            height_m = height_cm / 100.0
+            bmi_value = weight_kg / (height_m * height_m)
+            self.bmi.setValue(round(bmi_value, 1))
+        else:
+            self.bmi.setValue(0)
+
+        # Update BMI classification
+        bmi_value = self.bmi.value()
+        if bmi_value == 0:
+            classification = " "
+            color = "#6b7280"
+        elif bmi_value < 18.5:
+            classification = "Underweight"
+            color = "#3b82f6"
+        elif bmi_value < 25:
+            classification = "Normal Weight"
+            color = "#10b981"
+        elif bmi_value < 30:
+            classification = "Overweight"
+            color = "#f59e0b"
+        else:
+            classification = "Obese"
+            color = "#ef4444"
+        
+        self.bmi_classification_label.setText(classification)
+        self.bmi_classification_label.setStyleSheet(
+            f"QLabel{{font-size:10px;font-weight:600;color:{color};margin-top:-4px;}}"
+        )
 
     def _on_dob_text_changed(self, text):
         digits = "".join(ch for ch in text if ch.isdigit())[:8]
@@ -1061,6 +1297,27 @@ class ScreeningPage(QWidget):
         if date < self.min_dob_date or date > QDate.currentDate():
             return QDate()
         return date
+
+    def _set_dob_date(self, date: QDate, user_selected: bool = False):
+        if not isinstance(self.p_dob, QDateEdit):
+            return
+        self._dob_programmatic_update = True
+        try:
+            self.p_dob.setDate(date)
+        finally:
+            self._dob_programmatic_update = False
+        self._dob_user_selected = bool(user_selected and date.isValid() and date != self.min_dob_date)
+
+    def _on_dob_date_changed(self, date: QDate):
+        if not self._dob_programmatic_update:
+            self._dob_user_selected = bool(date.isValid() and date != self.min_dob_date)
+        self.update_age_from_dob(date)
+
+    def _on_dob_calendar_selected(self, date: QDate):
+        if not isinstance(self.p_dob, QDateEdit):
+            return
+        self._dob_user_selected = bool(date.isValid() and date != self.min_dob_date)
+        self.update_age_from_dob(self.p_dob.date())
 
     def _on_diagnosis_date_changed(self, text):
         """Format diagnosis date input and auto-calculate duration."""
@@ -1161,38 +1418,17 @@ class ScreeningPage(QWidget):
         self.diabetes_duration.setValue(max(0, years))
 
     def _validate_blood_pressure(self):
-        """Validate blood pressure ranges."""
+        """Validate blood pressure ranges - no warnings, just validation."""
         sys = self.bp_systolic.value()
         dia = self.bp_diastolic.value()
 
         # Both must be zero or both must be filled
         if (sys == 0) != (dia == 0):
-            QMessageBox.warning(
-                self, "Blood Pressure",
-                "Please enter both systolic and diastolic values, or leave both empty."
-            )
             return False
 
-        # If filled, check ranges
-        if sys > 0:
-            if sys < 80 or sys > 200:
-                QMessageBox.warning(
-                    self, "Blood Pressure",
-                    "Systolic pressure should be between 80-200 mmHg.\nIf this reading is correct, please document in clinical notes."
-                )
-                return False
-            if dia < 50 or dia > 130:
-                QMessageBox.warning(
-                    self, "Blood Pressure",
-                    "Diastolic pressure should be between 50-130 mmHg.\nIf this reading is correct, please document in clinical notes."
-                )
-                return False
-            if dia >= sys:
-                QMessageBox.warning(
-                    self, "Blood Pressure",
-                    "Diastolic pressure must be lower than systolic pressure."
-                )
-                return False
+        # If filled, check that diastolic is lower than systolic
+        if sys > 0 and dia >= sys:
+            return False
 
         return True
 
@@ -1442,6 +1678,9 @@ class ScreeningPage(QWidget):
         self.stacked_widget.setCurrentIndex(1)
 
     def cancel_screening(self):
+        if self._guard_busy_action("canceling screening"):
+            return
+
         reply = QMessageBox.question(
             self, "Cancel", "Are you sure you want to cancel? All data will be lost.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -1450,6 +1689,9 @@ class ScreeningPage(QWidget):
             self.reset_screening()
 
     def go_back_to_patient_info(self):
+        if self._guard_busy_action("going back"):
+            return
+
         reply = QMessageBox.question(
             self, "Go Back", "Going back will clear the image. Continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -1459,11 +1701,14 @@ class ScreeningPage(QWidget):
             self.stacked_widget.setCurrentIndex(0)
 
     def reset_screening(self):
+        if self._guard_busy_action("starting a new screening"):
+            return
+
         self.generate_patient_id()
         self.p_name.clear()
         self.p_contact.clear()
         if isinstance(self.p_dob, QDateEdit):
-            self.p_dob.setDate(self.min_dob_date)
+            self._set_dob_date(self.default_dob_date, user_selected=False)
         else:
             self.p_dob.clear()
         self.p_age.setValue(0)
@@ -1487,6 +1732,16 @@ class ScreeningPage(QWidget):
             self.fbs.setValue(0)
         if hasattr(self, "rbs"):
             self.rbs.setValue(0)
+        if hasattr(self, "height"):
+            self.height.setValue(0)
+        if hasattr(self, "weight"):
+            self.weight.setValue(0)
+        if hasattr(self, "bmi"):
+            self.bmi.setValue(0)
+        if hasattr(self, "treatment_regimen"):
+            self.treatment_regimen.setCurrentIndex(0)
+        if hasattr(self, "prev_dr_stage"):
+            self.prev_dr_stage.setCurrentIndex(0)
         self.symptom_blurred.setChecked(False)
         self.symptom_floaters.setChecked(False)
         self.symptom_flashes.setChecked(False)
@@ -1502,13 +1757,231 @@ class ScreeningPage(QWidget):
         self._last_saved_source_path = ""
         self._current_eye_saved = False
         self._first_eye_result = None
+        self._rescreen_replace_record_id = None
         self._flow_guard.reset()
+        self._set_navigation_locked(False)
         self.btn_analyze.setEnabled(False)
         self._set_upload_error("")
         self.discard_draft_session()
         self.stacked_widget.setCurrentIndex(0)
+        self.last_ai_classification = "Pending"
+        self.last_doctor_classification = "Pending"
+        self.last_decision_mode = "pending"
+        self.last_override_justification = ""
+        self.last_doctor_findings = ""
+        if hasattr(self, "results_page"):
+            self.results_page._doctor_classification = "Pending"
+            self.results_page._decision_mode = "pending"
+            self.results_page._override_justification = ""
+            self.results_page._doctor_findings = ""
+            self.results_page.override_reason_input.clear()
+            self.results_page.findings_input.clear()
+            self.results_page._refresh_decision_ui_state()
+
+    def _handle_flow_blocked(self, message: str) -> bool:
+        """Offer quick recovery when both eyes are already completed in this session."""
+        text = str(message or "")
+        if "already been analyzed" not in text.lower():
+            return False
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Screening Complete")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(text)
+        box.setInformativeText("You can start a new screening session or return to the current results.")
+        start_btn = box.addButton("Start New Screening", QMessageBox.ButtonRole.AcceptRole)
+        back_btn = box.addButton("Back to Screening Results", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("Stay", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+
+        chosen = box.clickedButton()
+        if chosen == start_btn:
+            self.reset_screening()
+        elif chosen == back_btn:
+            self._set_navigation_locked(False)
+            self.stacked_widget.setCurrentIndex(1)
+        return True
+
+    def load_patient_for_rescreen(self, record_id: int, replace_mode: bool = False):
+        """Load a patient from database for rescreening.
+
+        Args:
+            record_id: Database record ID to load
+            replace_mode: If True, will replace this record when saving. If False, creates new record.
+        """
+        try:
+            record_id = int(record_id)  # Ensure it's an integer
+            conn = sqlite3.connect(DB_FILE)
+            cur = conn.cursor()
+
+            # Use exact same query as generate_report's _fetch_full_record
+            cur.execute("""
+                SELECT id, patient_id, name, birthdate, age, sex, contact, eyes,
+                       diabetes_type, duration, hba1c, prev_treatment, notes,
+                       result, confidence, screened_at,
+                       ai_classification, doctor_classification, decision_mode, override_justification, final_diagnosis_icdr, doctor_findings,
+                       visual_acuity_left, visual_acuity_right,
+                       blood_pressure_systolic, blood_pressure_diastolic,
+                       fasting_blood_sugar, random_blood_sugar,
+                       symptom_blurred_vision, symptom_floaters,
+                       symptom_flashes, symptom_vision_loss,
+                       source_image_path, heatmap_image_path,
+                       image_sha256, image_saved_at
+                FROM patient_records WHERE id = ?
+            """, (record_id,))
+            row = cur.fetchone()
+            conn.close()
+
+            if not row:
+                write_activity("ERROR", "LOAD_RESCREEN_FAILED", f"No record found in DB for id={record_id}")
+                return False
+
+            # Map row tuple to values by position (matching query order)
+            (id_val, patient_id, name, birthdate, age, sex, contact, eyes,
+             diabetes_type, duration, hba1c, prev_treatment, notes,
+             result, confidence, screened_at,
+             ai_classification, doctor_classification, decision_mode, override_justification, final_diagnosis_icdr, doctor_findings,
+             va_left, va_right,
+             bp_sys, bp_dia,
+             fbs, rbs,
+             symptom_blurred, symptom_floaters,
+             symptom_flashes, symptom_vision_loss,
+             source_image_path, heatmap_image_path,
+             image_sha256, image_saved_at) = row
+
+            # Load data from record with safe type conversion
+            self.p_id.setText(str(patient_id or ""))
+            self.p_name.setText(str(name or ""))
+
+            # DOB widget can be a QDateEdit (current UI) or text field (legacy UI)
+            dob_text = str(birthdate or "").strip()
+            if isinstance(self.p_dob, QDateEdit):
+                dob_qdate = QDate()
+                for fmt in ("yyyy-MM-dd", "MM/dd/yyyy", "dd/MM/yyyy"):
+                    parsed = QDate.fromString(dob_text, fmt)
+                    if parsed.isValid():
+                        dob_qdate = parsed
+                        break
+
+                if dob_qdate.isValid():
+                    min_date = self.p_dob.minimumDate()
+                    max_date = self.p_dob.maximumDate()
+                    if min_date.isValid() and dob_qdate < min_date:
+                        dob_qdate = min_date
+                    if max_date.isValid() and dob_qdate > max_date:
+                        dob_qdate = max_date
+                    self._set_dob_date(dob_qdate, user_selected=True)
+                elif hasattr(self, "default_dob_date") and isinstance(self.default_dob_date, QDate):
+                    self._set_dob_date(self.default_dob_date, user_selected=False)
+            else:
+                self.p_dob.setText(dob_text)
+
+            # Safe int conversion for age
+            try:
+                age_val = int(float(str(age or 0)))
+                self.p_age.setValue(age_val)
+            except (ValueError, TypeError):
+                self.p_age.setValue(0)
+
+            # Safe sex setting
+            sex_str = str(sex or "").strip()
+            if sex_str and self.p_sex.findText(sex_str) >= 0:
+                self.p_sex.setCurrentText(sex_str)
+            else:
+                self.p_sex.setCurrentIndex(0)
+
+            self.p_contact.setText(str(contact or ""))
+
+            # Safe diabetes type setting
+            diabetes_str = str(diabetes_type or "").strip()
+            if diabetes_str and diabetes_str != "Select":
+                if self.diabetes_type.findText(diabetes_str) >= 0:
+                    self.diabetes_type.setCurrentText(diabetes_str)
+                else:
+                    self.diabetes_type.setCurrentIndex(0)
+            else:
+                self.diabetes_type.setCurrentIndex(0)
+
+            # Safe int conversion for duration
+            try:
+                duration_val = int(float(str(duration or 0)))
+                self.diabetes_duration.setValue(duration_val)
+            except (ValueError, TypeError):
+                self.diabetes_duration.setValue(0)
+
+            # Safe float conversion for hba1c
+            try:
+                hba1c_val = float(str(hba1c or 7.0))
+                self.hba1c.setValue(hba1c_val)
+            except (ValueError, TypeError):
+                self.hba1c.setValue(7.0)
+
+            # Safe prev_treatment boolean
+            try:
+                self.prev_treatment.setChecked(bool(prev_treatment and str(prev_treatment).lower() in ("yes", "true", "1")))
+            except Exception:
+                self.prev_treatment.setChecked(False)
+
+            self.notes.setPlainText(str(notes or ""))
+            self.last_ai_classification = str(ai_classification or result or "Pending")
+            self.last_doctor_classification = str(doctor_classification or final_diagnosis_icdr or result or "Pending")
+            self.last_decision_mode = str(decision_mode or "accepted")
+            self.last_override_justification = str(override_justification or "")
+            self.last_doctor_findings = str(doctor_findings or "")
+            if hasattr(self, "results_page"):
+                self.results_page._doctor_classification = self.last_doctor_classification
+                self.results_page._decision_mode = self.last_decision_mode
+                self.results_page._override_justification = self.last_override_justification
+                self.results_page._doctor_findings = self.last_doctor_findings
+                self.results_page.override_reason_input.setText(self.last_override_justification)
+                self.results_page.findings_input.setText(self.last_doctor_findings)
+                if self.last_doctor_classification in ("No DR", "Mild DR", "Moderate DR", "Severe DR", "Proliferative DR"):
+                    self.results_page.doctor_classification_combo.setCurrentText(self.last_doctor_classification)
+                self.results_page._refresh_decision_ui_state()
+
+            # Set eye based on previous record - match against available options
+            eye_value = str(eyes or "").strip()
+            if eye_value:
+                # Try exact match first
+                idx = self.p_eye.findText(eye_value)
+                if idx >= 0:
+                    self.p_eye.setCurrentIndex(idx)
+                else:
+                    # Try partial match as fallback
+                    matched = False
+                    for i in range(self.p_eye.count()):
+                        item_text = self.p_eye.itemText(i)
+                        if eye_value.lower() in item_text.lower() or item_text.lower() in eye_value.lower():
+                            self.p_eye.setCurrentIndex(i)
+                            matched = True
+                            break
+                    if not matched:
+                        self.p_eye.setCurrentIndex(0)
+            else:
+                self.p_eye.setCurrentIndex(0)
+
+            # Clear image for fresh screening
+            self.clear_image()
+            self._current_eye_saved = False
+            self._first_eye_result = None
+            self._flow_guard.reset()
+            self._set_navigation_locked(False)
+
+            # Store replace mode flag
+            self._rescreen_replace_record_id = record_id if replace_mode else None
+
+            write_activity("INFO", "LOAD_RESCREEN", f"Loaded patient for rescreening: record_id={record_id}, replace_mode={replace_mode}")
+            return True
+
+        except Exception as e:
+            err_detail = traceback.format_exc()
+            write_activity("ERROR", "LOAD_RESCREEN_FAILED", f"Exception: {type(e).__name__}: {str(e)} | {err_detail}")
+            return False
 
     def upload_image(self):
+        if self._guard_busy_action("uploading a new image"):
+            return
+
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Fundus Image", "", "Image Files (*.jpg *.jpeg *.png *.tif *.tiff *.bmp)"
         )
@@ -1525,7 +1998,90 @@ class ScreeningPage(QWidget):
             self.btn_analyze.setEnabled(True)
             self._set_upload_error("")
 
+    def take_picture_for_screening(self):
+        if self._guard_busy_action("opening camera capture"):
+            return
+
+        patient_id = self.p_id.text().strip()
+        if not patient_id:
+            patient_id = self.generate_patient_id()
+
+        eye_label = self.p_eye.currentText().strip()
+        if eye_label not in ("Right Eye", "Left Eye"):
+            QMessageBox.warning(
+                self,
+                "Eye Label Required",
+                "Select the eye to be screened (Right Eye or Left Eye) before taking a picture.",
+            )
+            return
+
+        main_window = self.window()
+        if main_window is self or not hasattr(main_window, "camera_page"):
+            QMessageBox.warning(self, "Camera Unavailable", "Camera page is not available in this session.")
+            return
+
+        operator = str(os.environ.get("EYESHIELD_CURRENT_NAME", "")).strip() or str(
+            os.environ.get("EYESHIELD_CURRENT_USER", "")
+        ).strip()
+        main_window.camera_page.set_capture_context(
+            patient_id=patient_id,
+            patient_name=self.p_name.text().strip(),
+            eye_label=eye_label,
+            operator=operator,
+            on_saved_callback=self._on_camera_capture_return,
+        )
+
+        if hasattr(main_window, "_navigate_to"):
+            main_window._navigate_to(2, nav_key="Camera")
+
+    def _on_camera_capture_return(self, capture_packet: dict):
+        image_path = str((capture_packet or {}).get("image_path") or "").strip()
+        if not image_path or not os.path.isfile(image_path):
+            QMessageBox.warning(
+                self,
+                "Capture Failed",
+                "Captured image could not be loaded. Please retake and save again.",
+            )
+            return
+
+        packet_patient_id = str((capture_packet or {}).get("patient_id") or "").strip()
+        current_patient_id = self.p_id.text().strip()
+        if packet_patient_id and current_patient_id and packet_patient_id != current_patient_id:
+            QMessageBox.critical(
+                self,
+                "Patient Mismatch",
+                "Captured image patient ID does not match the active Screening patient.\n\n"
+                "Please restart capture from the current patient record.",
+            )
+            write_activity(
+                "ERROR",
+                "CAMERA_CAPTURE_PATIENT_MISMATCH",
+                f"packet_patient_id={packet_patient_id}; current_patient_id={current_patient_id}; path={image_path}",
+            )
+            return
+
+        eye_label = str((capture_packet or {}).get("eye_label") or "").strip()
+        if eye_label in ("OD", "Right Eye"):
+            self.p_eye.setCurrentText("Right Eye")
+        elif eye_label in ("OS", "Left Eye"):
+            self.p_eye.setCurrentText("Left Eye")
+
+        self.current_image = image_path
+        if hasattr(self.image_label, "set_image"):
+            self.image_label.set_image(image_path)
+        else:
+            self._set_preview_image(image_path)
+        self.btn_analyze.setEnabled(True)
+        self._set_upload_error("")
+
+        main_window = self.window()
+        if main_window is not self and hasattr(main_window, "_navigate_to"):
+            main_window._navigate_to(1, nav_key="Screening")
+
     def _on_image_dropped(self, path: str):
+        if self._guard_busy_action("uploading a new image"):
+            return
+
         ok, msg = self._validate_image_selection(path)
         if not ok:
             self._set_upload_error(msg)
@@ -1563,6 +2119,9 @@ class ScreeningPage(QWidget):
 
     def screen_another_image(self):
         """Pick a new image from the results page, re-run analysis, update results in place."""
+        if self._guard_busy_action("re-screening"):
+            return
+
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Fundus Image", "", "Image Files (*.jpg *.jpeg *.png *.tif *.tiff *.bmp)"
         )
@@ -1619,11 +2178,16 @@ class ScreeningPage(QWidget):
         self.image_label.setPixmap(scaled)
 
     def open_results_window(self):
+        if self._guard_busy_action("proceeding to results"):
+            return
+
         if not self._validate_patient_basics():
             return
 
         ok, message = self._flow_guard.validate()
         if not ok:
+            if self._handle_flow_blocked(message):
+                return
             if "upload a fundus image" in message.lower() or "no image" in message.lower():
                 self._set_upload_error("Please select a fundus image to proceed")
             QMessageBox.warning(self, "Incomplete Form", message)
@@ -1672,9 +2236,13 @@ class ScreeningPage(QWidget):
         self._worker.start()
 
     def _resolve_duplicate_patient(self):
+        dob_date = self._get_dob_date()
+        if not dob_date.isValid():
+            return
+
         match = self._duplicate_detector.find_duplicate(
             name=self.p_name.text().strip(),
-            dob=self.p_dob.text().strip(),
+            dob=dob_date.toString("yyyy-MM-dd"),
             contact=self.p_contact.text().strip(),
         )
         if not match or not match.get("patient_id"):
@@ -1686,7 +2254,12 @@ class ScreeningPage(QWidget):
 
         current_id = self.p_id.text().strip()
         if current_id != matched_id:
-            self.p_id.setText(matched_id)
+            decision = DuplicateDialog(match, self).exec()
+            if decision == DuplicateDialog.USE_EXISTING:
+                self.p_id.setText(matched_id)
+                write_activity("INFO", "DUPLICATE_PATIENT", f"Reused existing patient_id={matched_id}")
+            else:
+                write_activity("INFO", "DUPLICATE_PATIENT", "User kept new patient ID")
 
     def _on_prediction_ready(self, label: str, conf: str, eye_label: str, patient_data: dict | None = None):
         self.last_result_class = label
@@ -1778,7 +2351,7 @@ class ScreeningPage(QWidget):
             "prev_treatment": self.prev_treatment.isChecked(),
             "diabetes_type":  self.diabetes_type.currentText(),
             "eye":            self.p_eye.currentText(),
-            # New fields
+            # Vital signs
             "va_left":        self.va_left.text().strip(),
             "va_right":       self.va_right.text().strip(),
             "bp_systolic":    self.bp_systolic.value() if self.bp_systolic.value() > 0 else None,
@@ -1786,6 +2359,12 @@ class ScreeningPage(QWidget):
             "fbs":            self.fbs.value() if self.fbs.value() > 0 else None,
             "rbs":            self.rbs.value() if self.rbs.value() > 0 else None,
             "symptoms":       symptoms,
+            # Phase 1 additions
+            "height":         self.height.value() if self.height.value() > 0 else None,
+            "weight":         self.weight.value() if self.weight.value() > 0 else None,
+            "bmi":            self.bmi.value() if self.bmi.value() > 0 else None,
+            "treatment_regimen": self.treatment_regimen.currentText(),
+            "prev_dr_stage":  self.prev_dr_stage.currentText(),
         }
 
     def has_unsaved_result(self) -> bool:
@@ -1819,9 +2398,19 @@ class ScreeningPage(QWidget):
             "symptom_vision_loss": self.symptom_vision_loss.isChecked(),
             "symptom_other": self.symptom_other.text().strip(),
             "notes": self.notes.toPlainText(),
+            "height": self.height.value() if hasattr(self, "height") else 0,
+            "weight": self.weight.value() if hasattr(self, "weight") else 0,
+            "bmi": self.bmi.value() if hasattr(self, "bmi") else 0,
+            "treatment_regimen": self.treatment_regimen.currentText() if hasattr(self, "treatment_regimen") else "",
+            "prev_dr_stage": self.prev_dr_stage.currentText() if hasattr(self, "prev_dr_stage") else "",
             "image_path": str(self.current_image or "").strip(),
             "result_class": self.last_result_class,
             "result_conf": self.last_result_conf,
+            "ai_classification": self.last_ai_classification,
+            "doctor_classification": self.last_doctor_classification,
+            "decision_mode": self.last_decision_mode,
+            "override_justification": self.last_override_justification,
+            "doctor_findings": self.last_doctor_findings,
             "result_saved": self._current_eye_saved,
         }
 
@@ -1904,6 +2493,21 @@ class ScreeningPage(QWidget):
 
         self.last_result_class = str(data.get("result_class") or "Pending")
         self.last_result_conf = str(data.get("result_conf") or "Pending")
+        self.last_ai_classification = str(data.get("ai_classification") or self.last_result_class or "Pending")
+        self.last_doctor_classification = str(data.get("doctor_classification") or self.last_result_class or "Pending")
+        self.last_decision_mode = str(data.get("decision_mode") or "pending")
+        self.last_override_justification = str(data.get("override_justification") or "")
+        self.last_doctor_findings = str(data.get("doctor_findings") or "")
+        if hasattr(self, "results_page"):
+            self.results_page._doctor_classification = self.last_doctor_classification
+            self.results_page._decision_mode = self.last_decision_mode
+            self.results_page._override_justification = self.last_override_justification
+            self.results_page._doctor_findings = self.last_doctor_findings
+            self.results_page.override_reason_input.setText(self.last_override_justification)
+            self.results_page.findings_input.setText(self.last_doctor_findings)
+            if self.last_doctor_classification in ("No DR", "Mild DR", "Moderate DR", "Severe DR", "Proliferative DR"):
+                self.results_page.doctor_classification_combo.setCurrentText(self.last_doctor_classification)
+            self.results_page._refresh_decision_ui_state()
         self._current_eye_saved = bool(data.get("result_saved"))
         write_activity("INFO", "RESTORE_DRAFT", f"Draft restored from {self._draft_path}")
         return True
@@ -1942,7 +2546,13 @@ class ScreeningPage(QWidget):
 
         src_ext = os.path.splitext(source_path)[1].lower() or ".jpg"
         dst_source = os.path.join(base_dir, f"{stamp}_{eye_tag}_source{src_ext}")
-        shutil.copy2(source_path, dst_source)
+
+        norm_source = source_path.replace("\\", "/").lower()
+        pending_marker = "/stored_images/pending/"
+        if pending_marker in norm_source:
+            shutil.move(source_path, dst_source)
+        else:
+            shutil.copy2(source_path, dst_source)
 
         dst_heatmap = ""
         if heatmap_path and os.path.isfile(heatmap_path):
@@ -2024,7 +2634,7 @@ class ScreeningPage(QWidget):
             return "new_session"
         return "cancel"
 
-    def _update_screening_record(self, record_id: int, patient_data) -> bool:
+    def _update_screening_record(self, record_id: int, patient_data, screener_username: str, screener_name: str) -> bool:
         try:
             conn = sqlite3.connect(DB_FILE)
             cur = conn.cursor()
@@ -2034,6 +2644,8 @@ class ScreeningPage(QWidget):
                     patient_id = ?, name = ?, birthdate = ?, age = ?, sex = ?, contact = ?, eyes = ?,
                     diabetes_type = ?, duration = ?, hba1c = ?, prev_treatment = ?, notes = ?,
                     result = ?, confidence = ?, screened_at = ?,
+                    ai_classification = ?, doctor_classification = ?, decision_mode = ?, override_justification = ?,
+                    final_diagnosis_icdr = ?, doctor_findings = ?, decision_by_username = ?, decision_at = ?,
                     visual_acuity_left = ?, visual_acuity_right = ?,
                     blood_pressure_systolic = ?, blood_pressure_diastolic = ?,
                     fasting_blood_sugar = ?, random_blood_sugar = ?,
@@ -2041,19 +2653,26 @@ class ScreeningPage(QWidget):
                     symptom_blurred_vision = ?, symptom_floaters = ?,
                     symptom_flashes = ?, symptom_vision_loss = ?,
                     source_image_path = ?, heatmap_image_path = ?,
-                    image_sha256 = ?, image_saved_at = ?
+                    image_sha256 = ?, image_saved_at = ?,
+                    height = ?, weight = ?, bmi = ?, treatment_regimen = ?, prev_dr_stage = ?,
+                    original_screener_username = COALESCE(NULLIF(original_screener_username, ''), ?),
+                    original_screener_name = COALESCE(NULLIF(original_screener_name, ''), ?)
                 WHERE id = ?
                 """,
-                [*patient_data, int(record_id)],
+                [*patient_data, screener_username, screener_name, int(record_id)],
             )
             conn.commit()
             updated = cur.rowcount > 0
             conn.close()
             return updated
-        except Exception:
+        except Exception as exc:
+            write_activity("ERROR", "SAVE_UPDATE_FAILED", f"{type(exc).__name__}: {exc}")
             return False
 
     def save_screening(self, reset_after=True):
+        if self._guard_busy_action("saving the result"):
+            return {"status": "blocked", "error": "Please wait for image analysis to finish before saving."}
+
         if not self._validate_patient_basics():
             return {"status": "invalid"}
 
@@ -2086,6 +2705,24 @@ class ScreeningPage(QWidget):
         notes = self.notes.toPlainText().strip()
         result = self.last_result_class
         confidence = self.last_result_conf
+        decision_payload = self.results_page.get_decision_payload() if hasattr(self, "results_page") else {}
+        decision_ok, decision_msg = self.results_page.validate_decision_before_save() if hasattr(self, "results_page") else (True, "")
+        if not decision_ok:
+            QMessageBox.warning(self, "Clinical Decision Required", decision_msg)
+            return {"status": "invalid"}
+        ai_classification = str(decision_payload.get("ai_classification") or result).strip()
+        doctor_classification = str(decision_payload.get("doctor_classification") or result).strip()
+        decision_mode = str(decision_payload.get("decision_mode") or "accepted").strip()
+        override_justification = str(decision_payload.get("override_justification") or "").strip()
+        final_diagnosis_icdr = str(decision_payload.get("final_diagnosis_icdr") or doctor_classification or result).strip()
+        doctor_findings = str(decision_payload.get("doctor_findings") or "").strip()
+        decision_by_username = str(os.environ.get("EYESHIELD_CURRENT_USER", "")).strip()
+        decision_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.last_ai_classification = ai_classification
+        self.last_doctor_classification = doctor_classification
+        self.last_decision_mode = decision_mode
+        self.last_override_justification = override_justification
+        self.last_doctor_findings = doctor_findings
 
         # New fields
         va_left = self.va_left.text().strip()
@@ -2094,6 +2731,13 @@ class ScreeningPage(QWidget):
         bp_dia = str(self.bp_diastolic.value()) if self.bp_diastolic.value() > 0 else ""
         fbs_val = str(self.fbs.value()) if self.fbs.value() > 0 else ""
         rbs_val = str(self.rbs.value()) if self.rbs.value() > 0 else ""
+
+        # Phase 1 additions
+        height_val = str(self.height.value()) if self.height.value() > 0 else ""
+        weight_val = str(self.weight.value()) if self.weight.value() > 0 else ""
+        bmi_val = str(self.bmi.value()) if self.bmi.value() > 0 else ""
+        treatment_regimen = self.treatment_regimen.currentText() if self.treatment_regimen.currentText() != "Select" else ""
+        prev_dr_stage = self.prev_dr_stage.currentText() if self.prev_dr_stage.currentText() != "Select" else ""
 
         # Symptoms as Yes/No flags
         symptom_blurred_flag = "Yes" if self.symptom_blurred.isChecked() else "No"
@@ -2120,6 +2764,12 @@ class ScreeningPage(QWidget):
             "notes": notes,
             "result": result,
             "confidence": confidence,
+            "ai_classification": ai_classification,
+            "doctor_classification": doctor_classification,
+            "decision_mode": decision_mode,
+            "override_justification": override_justification,
+            "final_diagnosis_icdr": final_diagnosis_icdr,
+            "doctor_findings": doctor_findings,
             "va_left": va_left,
             "va_right": va_right,
             "bp_sys": bp_sys,
@@ -2132,6 +2782,11 @@ class ScreeningPage(QWidget):
             "symptom_vision_loss": symptom_vision_loss_flag,
             "image": str(self.current_image or ""),
             "heatmap": str(getattr(self.results_page, "_current_heatmap_path", "") or ""),
+            "height": height_val,
+            "weight": weight_val,
+            "bmi": bmi_val,
+            "treatment_regimen": treatment_regimen,
+            "prev_dr_stage": prev_dr_stage,
         }
         initial_signature = hashlib.sha256(
             json.dumps(initial_signature_payload, ensure_ascii=True, sort_keys=True).encode("utf-8")
@@ -2140,16 +2795,23 @@ class ScreeningPage(QWidget):
             return {"status": "unchanged"}
 
         replace_record_id = None
-        existing_eye_record = self._find_existing_eye_record(pid, eye)
-        if existing_eye_record:
-            duplicate_action = self._prompt_duplicate_eye_action(pid, eye)
-            if duplicate_action == "cancel":
-                return {"status": "cancelled"}
-            if duplicate_action == "replace":
-                replace_record_id = int(existing_eye_record["id"])
-            elif duplicate_action == "new_session":
-                pid = self.generate_patient_id()
-                self._first_eye_result = None
+
+        # Check if this is a rescreening request (from Reports page)
+        if self._rescreen_replace_record_id is not None:
+            replace_record_id = self._rescreen_replace_record_id
+            self._rescreen_replace_record_id = None  # Clear flag after use
+        else:
+            # Standard duplicate detection
+            existing_eye_record = self._find_existing_eye_record(pid, eye)
+            if existing_eye_record:
+                duplicate_action = self._prompt_duplicate_eye_action(pid, eye)
+                if duplicate_action == "cancel":
+                    return {"status": "cancelled"}
+                if duplicate_action == "replace":
+                    replace_record_id = int(existing_eye_record["id"])
+                elif duplicate_action == "new_session":
+                    pid = self.generate_patient_id()
+                    self._first_eye_result = None
 
         pre_signature_payload = {
             "pid": pid,
@@ -2167,6 +2829,12 @@ class ScreeningPage(QWidget):
             "notes": notes,
             "result": result,
             "confidence": confidence,
+            "ai_classification": ai_classification,
+            "doctor_classification": doctor_classification,
+            "decision_mode": decision_mode,
+            "override_justification": override_justification,
+            "final_diagnosis_icdr": final_diagnosis_icdr,
+            "doctor_findings": doctor_findings,
             "va_left": va_left,
             "va_right": va_right,
             "bp_sys": bp_sys,
@@ -2179,6 +2847,11 @@ class ScreeningPage(QWidget):
             "symptom_vision_loss": symptom_vision_loss_flag,
             "image": str(self.current_image or ""),
             "heatmap": str(getattr(self.results_page, "_current_heatmap_path", "") or ""),
+            "height": height_val,
+            "weight": weight_val,
+            "bmi": bmi_val,
+            "treatment_regimen": treatment_regimen,
+            "prev_dr_stage": prev_dr_stage,
         }
         pre_signature = hashlib.sha256(
             json.dumps(pre_signature_payload, ensure_ascii=True, sort_keys=True).encode("utf-8")
@@ -2195,6 +2868,8 @@ class ScreeningPage(QWidget):
             return {"status": "error", "error": str(exc)}
 
         screened_at = datetime.now().strftime("%Y-%m-%d")
+        screener_username = str(os.environ.get("EYESHIELD_CURRENT_USER", "")).strip()
+        screener_name = str(os.environ.get("EYESHIELD_CURRENT_NAME", "")).strip() or screener_username
 
         patient_data = [
             pid,
@@ -2212,6 +2887,14 @@ class ScreeningPage(QWidget):
             result,
             confidence,
             screened_at,
+            ai_classification,
+            doctor_classification,
+            decision_mode,
+            override_justification,
+            final_diagnosis_icdr,
+            doctor_findings,
+            decision_by_username,
+            decision_at,
             # New fields (11 columns)
             va_left,
             va_right,
@@ -2228,12 +2911,18 @@ class ScreeningPage(QWidget):
             heatmap_image_path,
             image_sha256,
             image_saved_at,
+            # Phase 1 additions
+            height_val,
+            weight_val,
+            bmi_val,
+            treatment_regimen,
+            prev_dr_stage,
         ]
 
         save_ok = (
-            self._update_screening_record(replace_record_id, patient_data)
+            self._update_screening_record(replace_record_id, patient_data, screener_username, screener_name)
             if replace_record_id is not None
-            else self._save_screening_to_db(patient_data)
+            else self._save_screening_to_db(patient_data, screener_username, screener_name)
         )
         if not save_ok:
             action_label = "update" if replace_record_id is not None else "save"
@@ -2251,6 +2940,15 @@ class ScreeningPage(QWidget):
             "RESULT_REPLACED" if replace_record_id is not None else "RESULT_SAVED",
             f"patient_id={pid}; eye={eye}; path={self._last_saved_source_path}; result={result}; confidence={confidence}",
         )
+        if screener_username:
+            UserManager.add_activity_log(
+                screener_username,
+                (
+                    f"SCREENED_PATIENT patient_id={pid}; eye={eye}; "
+                    f"result={result}; confidence={confidence}; "
+                    f"mode={'replace' if replace_record_id is not None else 'new'}"
+                ),
+            )
         if reset_after:
             saved_name = name or "Unknown Patient"
             saved_eye = eye or "Selected Eye"
@@ -2284,18 +2982,23 @@ class ScreeningPage(QWidget):
             # Auto-prompt to screen the other eye (only if first eye, not second)
             if not self._first_eye_result.get('_is_second_eye'):
                 opposite_eye = "Left Eye" if eye_label == "Right Eye" else "Right Eye"
-                box = QMessageBox(self)
-                box.setWindowTitle("Screen Other Eye")
-                box.setIcon(QMessageBox.Icon.Question)
-                box.setText(
-                    f"<b>{eye_label}</b> screening {'updated' if replace_record_id is not None else 'saved'} successfully.\n\n"
-                    f"Would you like to screen the <b>{opposite_eye}</b> now?"
-                )
-                continue_btn = box.addButton("Continue", QMessageBox.ButtonRole.AcceptRole)
-                box.addButton("Finish", QMessageBox.ButtonRole.RejectRole)
-                box.exec()
-                if box.clickedButton() == continue_btn:
-                    self.screen_other_eye()
+                # Check if opposite eye already has a saved record
+                opposite_eye_exists = self._find_existing_eye_record(pid, opposite_eye) is not None
+
+                # Only prompt if opposite eye hasn't been saved yet
+                if not opposite_eye_exists:
+                    box = QMessageBox(self)
+                    box.setWindowTitle("Screen Other Eye")
+                    box.setIcon(QMessageBox.Icon.Question)
+                    box.setText(
+                        f"<b>{eye_label}</b> screening {'updated' if replace_record_id is not None else 'saved'} successfully.\n\n"
+                        f"Would you like to screen the <b>{opposite_eye}</b> now?"
+                    )
+                    continue_btn = box.addButton("Screen Other Eye", QMessageBox.ButtonRole.AcceptRole)
+                    box.addButton("Just This Eye", QMessageBox.ButtonRole.RejectRole)
+                    box.exec()
+                    if box.clickedButton() == continue_btn:
+                        self.screen_other_eye()
             return {
                 "status": "replaced" if replace_record_id is not None else "saved",
                 "path": self._last_saved_source_path,
@@ -2304,6 +3007,9 @@ class ScreeningPage(QWidget):
 
     def screen_other_eye(self):
         """Save the current eye's result and switch to the same patient's other eye."""
+        if self._guard_busy_action("switching eyes"):
+            return
+
         current_eye = self.p_eye.currentText().strip()
         opposite_eye = "Left Eye" if current_eye == "Right Eye" else "Right Eye"
 
@@ -2312,7 +3018,7 @@ class ScreeningPage(QWidget):
             box = QMessageBox(self)
             box.setWindowTitle("Unsaved Result")
             box.setIcon(QMessageBox.Icon.Warning)
-            box.setText("Save this result before screening the other eye?")
+            box.setText(f"Save this <b>{eye_label}</b> result before screening the <b>{opposite_eye}</b>?")
             save_btn = box.addButton("Save and Continue", QMessageBox.ButtonRole.AcceptRole)
             skip_btn = box.addButton("Skip and Continue", QMessageBox.ButtonRole.DestructiveRole)
             cancel_btn = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
@@ -2331,7 +3037,8 @@ class ScreeningPage(QWidget):
         # Capture current patient demographics and patient_id before resetting
         saved_pid = self.p_id.text().strip()
         name = self.p_name.text()
-        dob_text = self.p_dob.text() if not isinstance(self.p_dob, QDateEdit) else ""
+        dob_date = self._get_dob_date()
+        dob_text = self.p_dob.text()
         age = self.p_age.value()
         sex = self.p_sex.currentText()
         contact = self.p_contact.text()
@@ -2354,6 +3061,13 @@ class ScreeningPage(QWidget):
         sym_flashes = self.symptom_flashes.isChecked()
         sym_vision_loss = self.symptom_vision_loss.isChecked()
         sym_other = self.symptom_other.text()
+        
+        # Capture Phase 1 additions
+        height_v = self.height.value()
+        weight_v = self.weight.value()
+        bmi_v = self.bmi.value()
+        treatment_reg = self.treatment_regimen.currentText()
+        prev_dr = self.prev_dr_stage.currentText()
 
         # Preserve first eye result across reset so results page can show bilateral comparison
         saved_first_eye_result = self._first_eye_result
@@ -2371,7 +3085,12 @@ class ScreeningPage(QWidget):
 
         # Restore demographics for the same patient
         self.p_name.setText(name)
-        if not isinstance(self.p_dob, QDateEdit):
+        if isinstance(self.p_dob, QDateEdit):
+            if dob_date.isValid():
+                self._set_dob_date(dob_date, user_selected=True)
+            else:
+                self._set_dob_date(self.default_dob_date, user_selected=False)
+        else:
             self.p_dob.setText(dob_text)
         self.p_age.setValue(age)
         self.p_sex.setCurrentText(sex)
@@ -2396,6 +3115,13 @@ class ScreeningPage(QWidget):
         self.symptom_flashes.setChecked(sym_flashes)
         self.symptom_vision_loss.setChecked(sym_vision_loss)
         self.symptom_other.setText(sym_other)
+        
+        # Restore Phase 1 additions
+        self.height.setValue(height_v)
+        self.weight.setValue(weight_v)
+        self.bmi.setValue(bmi_v)
+        self.treatment_regimen.setCurrentText(treatment_reg)
+        self.prev_dr_stage.setCurrentText(prev_dr)
 
         # Pre-select the other eye
         self.p_eye.setCurrentText(opposite_eye)
@@ -2403,7 +3129,7 @@ class ScreeningPage(QWidget):
         # Return to intake form — only the image needs to be uploaded
         self.stacked_widget.setCurrentIndex(0)
 
-    def _save_screening_to_db(self, patient_data):
+    def _save_screening_to_db(self, patient_data, screener_username: str, screener_name: str):
         try:
             conn = sqlite3.connect(DB_FILE)
             cur = conn.cursor()
@@ -2413,6 +3139,8 @@ class ScreeningPage(QWidget):
                     patient_id, name, birthdate, age, sex, contact, eyes,
                     diabetes_type, duration, hba1c, prev_treatment, notes,
                     result, confidence, screened_at,
+                    ai_classification, doctor_classification, decision_mode, override_justification,
+                    final_diagnosis_icdr, doctor_findings, decision_by_username, decision_at,
                     visual_acuity_left, visual_acuity_right,
                     blood_pressure_systolic, blood_pressure_diastolic,
                     fasting_blood_sugar, random_blood_sugar,
@@ -2420,15 +3148,18 @@ class ScreeningPage(QWidget):
                     symptom_blurred_vision, symptom_floaters,
                     symptom_flashes, symptom_vision_loss,
                     source_image_path, heatmap_image_path,
-                    image_sha256, image_saved_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    image_sha256, image_saved_at,
+                    height, weight, bmi, treatment_regimen, prev_dr_stage,
+                    original_screener_username, original_screener_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                patient_data,
+                [*patient_data, screener_username, screener_name],
             )
             conn.commit()
             conn.close()
             return True
-        except Exception:
+        except Exception as exc:
+            write_activity("ERROR", "SAVE_INSERT_FAILED", f"{type(exc).__name__}: {exc}")
             return False
 
     def showEvent(self, event):
@@ -2464,6 +3195,8 @@ class ScreeningPage(QWidget):
                     label.setText(pack[key])
 
         self.btn_upload.setText(pack["scr_upload_btn"])
+        if hasattr(self, "btn_take_picture"):
+            self.btn_take_picture.setText(pack.get("scr_take_picture_btn", "Take Picture"))
         self.btn_clear.setText(pack["scr_clear_btn"])
         self.btn_analyze.setText(pack["scr_analyze_btn"])
         patient_labels = [

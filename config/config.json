@@ -1,0 +1,13 @@
+{
+  "admin_contact": {
+    "name": "Lebron James Jr.",
+    "email": "admin@eyeshield.local",
+    "phone": "+8-7000",
+    "location": "San Isidro, Tarlac City, Tarlac"
+  },
+  "support_contact": {
+    "email": "support@eyeshield.local",
+    "phone": "+8-7000",
+    "hours": "Mon-Fri, 8:00 AM - 6:00 PM"
+  }
+}
