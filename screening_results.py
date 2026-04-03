@@ -148,6 +148,7 @@ class ResultsWindow(QWidget):
         self._current_confidence   = ""
         self._current_eye_label    = ""
         self._current_patient_name = ""
+        self._first_eye_context    = {}
         self._doctor_classification = "Pending"
         self._decision_mode = "pending"
         self._override_justification = ""
@@ -184,7 +185,7 @@ class ResultsWindow(QWidget):
         heading_col.addWidget(self.breadcrumb_label)
 
         self.title_label = QLabel("Results")
-        self.title_label.setFont(QFont("DM Sans", 26, QFont.Weight.Bold))
+        self.title_label.setFont(QFont("Segoe UI", 26, QFont.Weight.Bold))
         self.title_label.setObjectName("pageHeader")
         heading_col.addWidget(self.title_label)
 
@@ -208,56 +209,45 @@ class ResultsWindow(QWidget):
         pills_row.addStretch(1)
         heading_col.addLayout(pills_row)
         top_row.addLayout(heading_col, 1)
+        layout.addLayout(top_row)
 
-        action_row = QHBoxLayout()
-        action_row.setSpacing(10)
-
-        self.btn_back = QPushButton("\u2190 Back")
-        self.btn_back.setObjectName("dangerAction")
-        self.btn_back.setMinimumHeight(36)
+        self.btn_back = QPushButton("Back")
+        self.btn_back.setObjectName("ghostAction")
+        self.btn_back.setMinimumHeight(40)
         self.btn_back.setIconSize(QSize(18, 18))
         self.btn_back.clicked.connect(self.go_back)
-        action_row.addWidget(self.btn_back)
 
         self.btn_save = QPushButton("Save Result")
-        self.btn_save.setObjectName("primaryAction")
-        self.btn_save.setMinimumHeight(36)
+        self.btn_save.setObjectName("ghostAction")
+        self.btn_save.setMinimumHeight(40)
         self.btn_save.setIconSize(QSize(18, 18))
         self.btn_save.clicked.connect(self.save_patient)
-        action_row.addWidget(self.btn_save)
 
         self.btn_report = QPushButton("Generate Report")
-        self.btn_report.setObjectName("neutralAction")
-        self.btn_report.setMinimumHeight(36)
+        self.btn_report.setObjectName("ghostAction")
+        self.btn_report.setMinimumHeight(40)
         self.btn_report.setIconSize(QSize(18, 18))
         self.btn_report.setEnabled(False)
         self.btn_report.clicked.connect(self.generate_report)
-        action_row.addWidget(self.btn_report)
 
         self.btn_referral = QPushButton("Refer")
-        self.btn_referral.setObjectName("referAction")
-        self.btn_referral.setMinimumHeight(36)
+        self.btn_referral.setObjectName("ghostAction")
+        self.btn_referral.setMinimumHeight(40)
         self.btn_referral.setIconSize(QSize(18, 18))
         self.btn_referral.setEnabled(False)
         self.btn_referral.clicked.connect(self._show_referral_options)
-        action_row.addWidget(self.btn_referral)
 
         self.btn_screen_another = QPushButton("Screen Other Eye")
-        self.btn_screen_another.setObjectName("neutralAction")
-        self.btn_screen_another.setMinimumHeight(36)
+        self.btn_screen_another.setObjectName("ghostAction")
+        self.btn_screen_another.setMinimumHeight(40)
         self.btn_screen_another.setIconSize(QSize(18, 18))
         self.btn_screen_another.clicked.connect(self._on_screen_another)
-        action_row.addWidget(self.btn_screen_another)
 
-        self.btn_new = QPushButton("+ New Patient")
-        self.btn_new.setObjectName("primaryAction")
-        self.btn_new.setMinimumHeight(36)
+        self.btn_new = QPushButton("New Patient")
+        self.btn_new.setObjectName("ghostAction")
+        self.btn_new.setMinimumHeight(40)
         self.btn_new.setIconSize(QSize(18, 18))
         self.btn_new.clicked.connect(self.new_patient)
-        action_row.addWidget(self.btn_new)
-
-        top_row.addLayout(action_row)
-        layout.addLayout(top_row)
 
         self._loading_bar = QProgressBar()
         self._loading_bar.setRange(0, 0)   # indeterminate / marquee
@@ -302,7 +292,7 @@ class ResultsWindow(QWidget):
         source_layout.addLayout(source_head)
         self.source_label = ClickableImageLabel("", "Source Image - Fundus")
         self.source_label.setObjectName("sourceImageSurface")
-        self.source_label.setMinimumHeight(320)
+        self.source_label.setMinimumHeight(330)
         self.source_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.source_label.setWordWrap(True)
         source_layout.addWidget(self.source_label)
@@ -324,13 +314,50 @@ class ResultsWindow(QWidget):
         heatmap_layout.addLayout(heatmap_head)
         self.heatmap_label = ClickableImageLabel("", "Grad-CAM++ Heatmap")
         self.heatmap_label.setObjectName("heatmapImageSurface")
-        self.heatmap_label.setMinimumHeight(320)
+        self.heatmap_label.setMinimumHeight(330)
         self.heatmap_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.heatmap_label.setWordWrap(True)
         heatmap_layout.addWidget(self.heatmap_label)
 
+        actions_card = QGroupBox("")
+        actions_card.setObjectName("resultGroupCard")
+        actions_layout = QVBoxLayout(actions_card)
+        actions_layout.setContentsMargins(16, 16, 16, 16)
+        actions_layout.setSpacing(10)
+
+        actions_head = QHBoxLayout()
+        actions_head.setSpacing(6)
+        actions_title = QLabel("Actions")
+        actions_title.setObjectName("cardHeaderLabel")
+        actions_head.addWidget(actions_title)
+        actions_head.addStretch(1)
+        actions_layout.addLayout(actions_head)
+
+        actions_hint = QLabel("Workflow shortcuts for save, handoff, reports, and navigation.")
+        actions_hint.setObjectName("metaText")
+        actions_hint.setWordWrap(True)
+        actions_layout.addWidget(actions_hint)
+
+        actions_grid = QGridLayout()
+        actions_grid.setHorizontalSpacing(0)
+        actions_grid.setVerticalSpacing(10)
+        actions_grid.addWidget(self.btn_screen_another, 0, 0)
+        actions_grid.addWidget(self.btn_save, 1, 0)
+        actions_grid.addWidget(self.btn_report, 2, 0)
+        actions_grid.addWidget(self.btn_referral, 3, 0)
+        actions_grid.addWidget(self.btn_new, 4, 0)
+        actions_grid.addWidget(self.btn_back, 5, 0)
+        actions_grid.setColumnStretch(0, 1)
+        actions_layout.addLayout(actions_grid)
+        actions_layout.addStretch(1)
+        actions_card.setMinimumWidth(300)
+
         image_row.addWidget(source_card, 1)
         image_row.addWidget(heatmap_card, 1)
+        image_row.addWidget(actions_card, 0)
+        image_row.setStretch(0, 1)
+        image_row.setStretch(1, 1)
+        image_row.setStretch(2, 0)
         layout.addLayout(image_row)
 
         class_card = QFrame()
@@ -353,48 +380,82 @@ class ResultsWindow(QWidget):
         decision_group.setObjectName("resultGroupCard")
         decision_layout = QVBoxLayout(decision_group)
         decision_layout.setContentsMargins(14, 14, 14, 14)
-        decision_layout.setSpacing(8)
+        decision_layout.setSpacing(10)
 
-        self.final_dx_label = QLabel("Doctor's Classification")
-        self.final_dx_label.setObjectName("resultStatTitle")
-        decision_layout.addWidget(self.final_dx_label)
+        self.step1_label = QLabel("1. Review AI result")
+        self.step1_label.setObjectName("resultStatTitle")
+        decision_layout.addWidget(self.step1_label)
 
         ai_row = QHBoxLayout()
         ai_row.setSpacing(8)
         ai_tag = QLabel("AI")
-        ai_tag.setObjectName("infoPill")
+        ai_tag.setObjectName("decisionRoleTag")
         self.ai_classification_value = QLabel("Pending")
         self.ai_classification_value.setObjectName("resultStatValue")
         ai_row.addWidget(ai_tag)
         ai_row.addWidget(self.ai_classification_value, 1)
         decision_layout.addLayout(ai_row)
 
+        self.step2_label = QLabel("2. Confirm your classification")
+        self.step2_label.setObjectName("resultStatTitle")
+        decision_layout.addWidget(self.step2_label)
+
         doctor_row = QHBoxLayout()
         doctor_row.setSpacing(8)
         doctor_tag = QLabel("Doctor")
-        doctor_tag.setObjectName("savedPill")
+        doctor_tag.setObjectName("decisionRoleTag")
+        doctor_tag.setFixedHeight(34)
+        doctor_tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.doctor_classification_input = QLineEdit()
         self.doctor_classification_input.setPlaceholderText("Enter doctor classification (e.g., No DR)")
+        self.doctor_classification_input.setMaximumWidth(280)
+        self.doctor_classification_input.setFixedHeight(34)
         self.doctor_classification_input.textChanged.connect(self._on_doctor_classification_changed)
-        doctor_row.addWidget(doctor_tag)
-        doctor_row.addWidget(self.doctor_classification_input, 1)
+        doctor_row.addWidget(doctor_tag, 0, Qt.AlignmentFlag.AlignVCenter)
+        doctor_row.addWidget(self.doctor_classification_input, 0, Qt.AlignmentFlag.AlignVCenter)
+        doctor_row.addStretch(1)
         decision_layout.addLayout(doctor_row)
+
+        self.classification_match_label = QLabel("Your current classification matches the AI")
+        self.classification_match_label.setObjectName("metaText")
+        self.classification_match_label.setWordWrap(True)
+        decision_layout.addWidget(self.classification_match_label)
+
+        self.step3_label = QLabel("3. Decide: accept or override the AI result")
+        self.step3_label.setObjectName("resultStatTitle")
+        decision_layout.addWidget(self.step3_label)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
-        self.accept_ai_btn = QPushButton("Accept AI")
+        self.accept_ai_btn = QPushButton("Accept AI result")
+        self.accept_ai_btn.setObjectName("decisionChoiceButton")
         self.accept_ai_btn.clicked.connect(self._accept_ai_classification)
-        self.override_ai_btn = QPushButton("Override AI")
+        self.override_ai_btn = QPushButton("Override AI result")
+        self.override_ai_btn.setObjectName("decisionChoiceButton")
         self.override_ai_btn.clicked.connect(self._prepare_override)
         action_row.addWidget(self.accept_ai_btn)
         action_row.addWidget(self.override_ai_btn)
         decision_layout.addLayout(action_row)
 
+        self.documentation_panel = QFrame()
+        self.documentation_panel.setObjectName("decisionStepPanel")
+        documentation_layout = QVBoxLayout(self.documentation_panel)
+        documentation_layout.setContentsMargins(12, 10, 12, 12)
+        documentation_layout.setSpacing(8)
+
+        self.step4_label = QLabel("4. Document your override")
+        self.step4_label.setObjectName("resultStatTitle")
+        documentation_layout.addWidget(self.step4_label)
+
+        self.step4_hint = QLabel("Override requires concise clinical justification.")
+        self.step4_hint.setObjectName("metaText")
+        self.step4_hint.setWordWrap(True)
+        documentation_layout.addWidget(self.step4_hint)
+
         comments_grid = QGridLayout()
         comments_grid.setHorizontalSpacing(12)
         comments_grid.setVerticalSpacing(6)
         comments_grid.setColumnStretch(0, 1)
-        comments_grid.setColumnStretch(1, 1)
 
         self.override_reason_label = QLabel("Override justification of results")
         self.override_reason_label.setObjectName("metaText")
@@ -404,24 +465,34 @@ class ResultsWindow(QWidget):
         self.override_reason_input.setMinimumHeight(110)
         self.override_reason_input.textChanged.connect(self._on_override_reason_changed)
 
-        self.findings_label = QLabel("Doctor findings and classification comments")
-        self.findings_label.setObjectName("metaText")
-        self.findings_input = QTextEdit()
-        self.findings_input.setObjectName("findingsCommentBox")
-        self.findings_input.setPlaceholderText("Document retinal findings supporting the selected ICDR classification...")
-        self.findings_input.setMinimumHeight(110)
-        self.findings_input.textChanged.connect(self._on_findings_changed)
-
         comments_grid.addWidget(self.override_reason_label, 0, 0)
-        comments_grid.addWidget(self.findings_label, 0, 1)
         comments_grid.addWidget(self.override_reason_input, 1, 0)
-        comments_grid.addWidget(self.findings_input, 1, 1)
-        decision_layout.addLayout(comments_grid)
+        documentation_layout.addLayout(comments_grid)
+
+        decision_layout.addWidget(self.documentation_panel)
 
         self.decision_hint = QLabel("AI is decision support. Doctor classification is the final authority.")
         self.decision_hint.setObjectName("metaText")
         self.decision_hint.setWordWrap(True)
         decision_layout.addWidget(self.decision_hint)
+
+        self.optional_comment_panel = QFrame()
+        self.optional_comment_panel.setObjectName("decisionStepPanel")
+        optional_layout = QVBoxLayout(self.optional_comment_panel)
+        optional_layout.setContentsMargins(12, 10, 12, 12)
+        optional_layout.setSpacing(8)
+
+        self.findings_label = QLabel("Optional doctor findings and comments")
+        self.findings_label.setObjectName("metaText")
+        self.findings_input = QTextEdit()
+        self.findings_input.setObjectName("findingsCommentBox")
+        self.findings_input.setPlaceholderText("Optional: add retinal findings or clinical comments...")
+        self.findings_input.setMinimumHeight(96)
+        self.findings_input.textChanged.connect(self._on_findings_changed)
+        optional_layout.addWidget(self.findings_label)
+        optional_layout.addWidget(self.findings_input)
+
+        decision_layout.addWidget(self.optional_comment_panel)
 
         confidence_card = QFrame()
         confidence_card.setObjectName("resultStatCard")
@@ -475,6 +546,15 @@ class ResultsWindow(QWidget):
         stats_row.addWidget(reco_card, 1)
         layout.addLayout(stats_row)
 
+        self.ai_disclaimer_label = QLabel(
+            "This AI-generated output is provided solely as clinical decision support. "
+            "Final diagnosis, treatment planning, and all medical decisions remain the exclusive "
+            "responsibility of the attending licensed physician."
+        )
+        self.ai_disclaimer_label.setObjectName("aiDisclaimerLabel")
+        self.ai_disclaimer_label.setWordWrap(True)
+        layout.addWidget(self.ai_disclaimer_label)
+
         # Bilateral comparison card (hidden until second eye is being reviewed)
         self.bilateral_frame = QFrame()
         self.bilateral_frame.setObjectName("resultStatCard")
@@ -522,11 +602,15 @@ class ResultsWindow(QWidget):
 
         self._apply_action_icons()
 
-        explanation_group = QGroupBox("AI Clinical Evaluation")
+        explanation_group = QGroupBox("AI Summary")
         explanation_group.setObjectName("resultGroupCard")
         explanation_layout = QVBoxLayout(explanation_group)
-        explanation_layout.setContentsMargins(18, 18, 18, 18)
-        explanation_layout.setSpacing(12)
+        explanation_layout.setContentsMargins(22, 20, 22, 20)
+        explanation_layout.setSpacing(14)
+
+        self.ai_summary_title = QLabel("AI SUMMARY")
+        self.ai_summary_title.setObjectName("resultStatTitle")
+        explanation_layout.addWidget(self.ai_summary_title)
 
         self.summary_line_1 = QLabel("No signs of diabetic retinopathy detected")
         self.summary_line_1.setObjectName("summaryRowSuccess")
@@ -564,7 +648,7 @@ class ResultsWindow(QWidget):
             QWidget {
                 background: #ffffff;
                 color: #1f2937;
-                font-family: "Segoe UI", "Inter", sans-serif;
+                font-family: "Segoe UI";
                 font-size: 14px;
             }
             QScrollArea {
@@ -607,6 +691,16 @@ class ResultsWindow(QWidget):
                 padding: 4px 12px;
                 font-size: 12px;
                 font-weight: 700;
+            }
+            QLabel#aiDisclaimerLabel {
+                background: #fffbeb;
+                color: #7c2d12;
+                border: 1px solid #fed7aa;
+                border-radius: 8px;
+                padding: 10px 12px;
+                font-size: 12px;
+                line-height: 1.45;
+                font-weight: 600;
             }
             QGroupBox#resultGroupCard {
                 background: #ffffff;
@@ -658,7 +752,7 @@ class ResultsWindow(QWidget):
             }
             QLabel#classificationValue {
                 color: #2563eb;
-                font-size: 33px;
+                font-size: 27px;
                 font-weight: 700;
             }
             QLabel#resultStatValue {
@@ -668,8 +762,8 @@ class ResultsWindow(QWidget):
             }
             QLabel#monoValue {
                 color: #1f2937;
-                font-family: "DM Mono", "Consolas", monospace;
-                font-size: 22px;
+                font-family: "Segoe UI";
+                font-size: 18px;
                 font-weight: 700;
             }
             QProgressBar#confidenceBar {
@@ -697,6 +791,61 @@ class ResultsWindow(QWidget):
                 font-size: 12px;
                 font-weight: 500;
             }
+            QLabel#decisionRoleTag {
+                background: #f8fafc;
+                color: #334155;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                padding: 3px 10px;
+                font-size: 11px;
+                font-weight: 700;
+                min-height: 20px;
+            }
+            QFrame#decisionStepPanel {
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
+                border-radius: 10px;
+            }
+            QPushButton#decisionChoiceButton {
+                background: #ffffff;
+                color: #1f2937;
+                border: 1px solid #60a5fa;
+                border-radius: 8px;
+                padding: 8px 14px;
+                font-weight: 700;
+            }
+            QPushButton#decisionChoiceButton:hover {
+                background: #eff6ff;
+                border-color: #3b82f6;
+            }
+            QPushButton#decisionChoiceButton:pressed {
+                background: #dbeafe;
+                border-color: #2563eb;
+            }
+            QPushButton#decisionChoiceButton:disabled {
+                background: #f8fafc;
+                color: #94a3b8;
+                border-color: #bfdbfe;
+            }
+            QPushButton#ghostAction {
+                background: #ffffff;
+                border: 1px solid #bfdbfe;
+                color: #1a1a1a;
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 13px;
+                font-family: "Segoe UI";
+                font-weight: 400;
+            }
+            QPushButton#ghostAction:hover {
+                background: #eff6ff;
+                border-color: #93c5fd;
+            }
+            QPushButton#ghostAction:disabled {
+                background: #f8fafc;
+                color: #94a3b8;
+                border-color: #dbeafe;
+            }
             QTextEdit#overrideCommentBox,
             QTextEdit#findingsCommentBox {
                 background: #ffffff;
@@ -717,7 +866,7 @@ class ResultsWindow(QWidget):
             }
             QLabel#uncertaintyValue {
                 color: #92400e;
-                font-size: 22px;
+                font-size: 18px;
                 font-weight: 700;
                 letter-spacing: 0.4px;
             }
@@ -888,6 +1037,16 @@ class ResultsWindow(QWidget):
         self.btn_screen_another.setIcon(self._build_action_icon("another_eye.svg", QStyle.StandardPixmap.SP_FileDialogStart))
         self.btn_new.setIcon(self._build_action_icon("new_patient.svg", QStyle.StandardPixmap.SP_FileDialogNewFolder))
         self.btn_back.setIcon(self._build_action_icon("back_to_screening.svg", QStyle.StandardPixmap.SP_ArrowBack))
+        self.accept_ai_btn.setIcon(self._build_action_icon("accep_ai_result.svg", QStyle.StandardPixmap.SP_DialogApplyButton))
+        self.override_ai_btn.setIcon(self._build_action_icon("override_ai result.svg", QStyle.StandardPixmap.SP_FileDialogDetailedView))
+
+    def _resolve_actor_username(self) -> str:
+        raw_username = str(
+            os.environ.get("EYESHIELD_CURRENT_USER")
+            or (getattr(self.parent_page, "username", "") if self.parent_page else "")
+            or (getattr(self.window(), "username", "") if self.window() is not self else "")
+        ).strip()
+        return UserManager.resolve_username(raw_username)
 
     def changeEvent(self, event):
         if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
@@ -929,7 +1088,7 @@ class ResultsWindow(QWidget):
     def _reset_save_button_default(self):
         self.btn_save.setEnabled(True)
         self.btn_save.setText("Save Result")
-        self.btn_save.setObjectName("primaryAction")
+        self.btn_save.setObjectName("ghostAction")
         self.btn_save.setStyle(self.btn_save.style())
         self.save_note_label.hide()
 
@@ -991,13 +1150,14 @@ class ResultsWindow(QWidget):
         chosen = str(value or "").strip()
         self._doctor_classification = chosen
         ai_value = str(self._current_result_class or "").strip()
-        if self._doctor_classification == ai_value:
-            if self._decision_mode == "override":
-                self._decision_mode = "accepted"
-                self.override_reason_input.clear()
-                self._override_justification = ""
-        elif self._doctor_classification:
-            self._decision_mode = "override"
+        if self._decision_mode in ("accepted", "override"):
+            if self._doctor_classification == ai_value:
+                if self._decision_mode == "override":
+                    self._decision_mode = "accepted"
+                    self.override_reason_input.clear()
+                    self._override_justification = ""
+            elif self._doctor_classification:
+                self._decision_mode = "override"
         self._refresh_decision_ui_state()
 
     def _on_override_reason_changed(self, text: str = ""):
@@ -1015,28 +1175,52 @@ class ResultsWindow(QWidget):
 
     def _refresh_decision_ui_state(self):
         ai_value = str(self._current_result_class or "").strip()
-        requires_override = bool(self._doctor_classification and self._doctor_classification != ai_value)
+        doctor_value = str(self.doctor_classification_input.text() or self._doctor_classification or "").strip()
+        requires_override = bool(doctor_value and doctor_value != ai_value)
+
+        show_documentation = self._decision_mode == "override" or requires_override
+        show_optional_comment = self._decision_mode in ("accepted", "override") or requires_override
         show_override = self._decision_mode == "override" or requires_override
+
+        self.documentation_panel.setVisible(show_documentation)
+        self.optional_comment_panel.setVisible(show_optional_comment)
         self.override_reason_label.setVisible(show_override)
         self.override_reason_input.setVisible(show_override)
-        if requires_override:
-            self.decision_hint.setText("Override selected. Clinical justification is required before saving.")
+
+        if not doctor_value:
+            self.classification_match_label.setText("Enter your classification to continue.")
+        elif doctor_value == ai_value:
+            self.classification_match_label.setText("Your current classification matches the AI")
         else:
-            self.decision_hint.setText("AI is decision support. Doctor classification is the final authority.")
+            self.classification_match_label.setText("Your classification differs from AI. Override documentation is required.")
+
+        if requires_override:
+            self.decision_hint.setText("Override selected. Provide clinical justification before saving.")
+        elif self._decision_mode == "accepted":
+            self.decision_hint.setText("AI accepted. Optional doctor comments can be added below.")
+        else:
+            self.decision_hint.setText("Choose Accept AI or Override AI to reveal the required documentation fields.")
 
     def get_decision_payload(self) -> dict:
         ai_value = str(self._current_result_class or "").strip()
-        doctor_value = str(self._doctor_classification or "").strip()
+        doctor_value = str(self.doctor_classification_input.text() or self._doctor_classification or "").strip()
         requires_override = doctor_value and ai_value and doctor_value != ai_value
         mode = "override" if requires_override else "accepted"
-        override_text = str(self._override_justification or "").strip()
+        override_text = str(self.override_reason_input.toPlainText() or self._override_justification or "").strip()
+        findings_text = str(self.findings_input.toPlainText() or self._doctor_findings or "").strip()
+
+        # Keep cached state aligned with latest UI before downstream save/report logic runs.
+        self._doctor_classification = doctor_value
+        self._override_justification = override_text
+        self._doctor_findings = findings_text
+
         return {
             "ai_classification": ai_value,
             "doctor_classification": doctor_value,
             "decision_mode": mode,
             "override_justification": override_text,
             "final_diagnosis_icdr": doctor_value,
-            "doctor_findings": str(self._doctor_findings or "").strip(),
+            "doctor_findings": findings_text,
         }
 
     def validate_decision_before_save(self) -> tuple[bool, str]:
@@ -1049,8 +1233,6 @@ class ResultsWindow(QWidget):
             justification = str(payload.get("override_justification") or "").strip()
             if len(justification) < 8:
                 return False, "Override requires a brief clinical justification (at least 8 characters)."
-            if len(findings) < 8:
-                return False, "Please enter doctor findings/comment (at least 8 characters) for overrides."
         elif not findings:
             # Auto-fill a concise default note for accepted AI decisions to avoid hard save failures.
             default_note = f"Clinician reviewed and accepted AI classification: {doctor_value}."
@@ -1079,12 +1261,13 @@ class ResultsWindow(QWidget):
         self.save_status_label.setText("Saved ✓")
         self.btn_save.setEnabled(not is_busy)
         self.btn_save.setText("Save Result")
-        self.btn_save.setObjectName("primaryAction")
+        self.btn_save.setObjectName("ghostAction")
         self.btn_save.setStyle(self.btn_save.style())
         self.btn_screen_another.setEnabled(not is_busy)
 
         # Bilateral comparison
         if first_eye_result:
+            self._first_eye_context = dict(first_eye_result)
             self.bilateral_first_eye_lbl.setText(first_eye_result.get("eye", "—"))
             self.bilateral_first_result_lbl.setText(first_eye_result.get("result", "—"))
             self.bilateral_second_eye_lbl.setText(eye_label or "Current Eye")
@@ -1094,6 +1277,7 @@ class ResultsWindow(QWidget):
             self.bilateral_second_saved_lbl.setObjectName("errorLabel")
             self.bilateral_frame.show()
         else:
+            self._first_eye_context = {}
             self.bilateral_frame.hide()
 
         # Classification with severity colour
@@ -1202,7 +1386,7 @@ class ResultsWindow(QWidget):
         if result_class in ICDR_OPTIONS:
             self.doctor_classification_input.setText(result_class)
             self._doctor_classification = result_class
-            self._decision_mode = "accepted"
+            self._decision_mode = "pending"
             self._override_justification = ""
             self.override_reason_input.clear()
             self._doctor_findings = ""
@@ -1321,6 +1505,20 @@ class ResultsWindow(QWidget):
                 write_activity("INFO", "DIALOG_NEW_PATIENT", "Cancel")
                 return
             write_activity("WARNING", "DIALOG_NEW_PATIENT", "Discard and Continue")
+
+        has_visible_result = bool(str(getattr(self, "_current_image_path", "") or "").strip())
+        if has_visible_result:
+            confirm_clear = QMessageBox.question(
+                self,
+                "Clear Current Results",
+                "Starting a new patient will clear the current results area. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if confirm_clear != QMessageBox.StandardButton.Yes:
+                write_activity("INFO", "DIALOG_NEW_PATIENT", "Cancel Clear Results")
+                return
+
         if hasattr(page, "reset_screening"):
             page.reset_screening()
 
@@ -1362,8 +1560,6 @@ class ResultsWindow(QWidget):
                 missing_profile.append("Name")
             if pp.p_age.value() <= 0:
                 missing_profile.append("Age")
-            if pp.hba1c.value() <= 0:
-                missing_profile.append("HbA1c")
         if missing_profile:
             QMessageBox.warning(
                 self,
@@ -1435,6 +1631,7 @@ class ResultsWindow(QWidget):
 
         # Collect symptoms for pill display
         symptoms = []
+        symptom_other_val = ""
         if pp:
             if hasattr(pp, "symptom_blurred") and pp.symptom_blurred.isChecked():
                 symptoms.append("Blurred Vision")
@@ -1580,6 +1777,7 @@ class ResultsWindow(QWidget):
             if symptoms
             else '<span style="color:#6b7280;">None reported</span>'
         )
+        other_symptom_disp = esc_or_dash(symptom_other_val)
 
         def resolve_image_path(path_value: str) -> str:
             raw = str(path_value or "").strip()
@@ -1633,6 +1831,75 @@ class ResultsWindow(QWidget):
 
         source_image_uri = build_embedded_image_uri(self._current_image_path, 280, 280)
         heatmap_image_uri = build_embedded_image_uri(self._current_heatmap_path, 280, 280)
+
+        first_eye_ctx = dict(getattr(self, "_first_eye_context", {}) or {})
+        first_eye_label = str(first_eye_ctx.get("eye") or "").strip()
+        first_eye_result = str(first_eye_ctx.get("result") or "").strip() or "—"
+        first_eye_confidence = str(first_eye_ctx.get("confidence") or "").strip() or "—"
+        first_source_image_uri = build_embedded_image_uri(first_eye_ctx.get("image_path"), 280, 280) if first_eye_ctx else ""
+        first_heatmap_image_uri = build_embedded_image_uri(first_eye_ctx.get("heatmap_path"), 280, 280) if first_eye_ctx else ""
+
+        second_eye_label = str(self._current_eye_label or "").strip() or "Current Eye"
+        second_eye_result = str(result_raw or "").strip() or "—"
+        second_eye_confidence = str(conf_display or "").strip() or "—"
+
+        bilateral_eye_labels = []
+        for eye_name in (first_eye_label, second_eye_label):
+            name = str(eye_name or "").strip()
+            if name and name not in bilateral_eye_labels:
+                bilateral_eye_labels.append(name)
+        combined_eye_display = ", ".join(bilateral_eye_labels) if bilateral_eye_labels else (second_eye_label or "—")
+        is_bilateral_report = bool(first_eye_ctx and first_eye_label)
+
+        def _render_eye_image_pair(eye_name: str, eye_grade: str, eye_conf: str, src_uri: str, heat_uri: str) -> str:
+            source_html = (
+                f'<img src="{src_uri}" style="max-width:100%;max-height:230px;width:auto;height:auto;page-break-inside:avoid;break-inside:avoid-page;" />'
+                if src_uri else
+                '<div style="text-align:center;background:#ffffff;padding:30px;border:1px solid #e5e7eb;color:#9ca3af;font-style:italic;font-size:9pt;">Image not available</div>'
+            )
+            heat_html = (
+                f'<img src="{heat_uri}" style="max-width:100%;max-height:230px;width:auto;height:auto;page-break-inside:avoid;break-inside:avoid-page;" />'
+                if heat_uri else
+                '<div style="text-align:center;background:#ffffff;padding:30px;border:1px solid #e5e7eb;color:#9ca3af;font-style:italic;font-size:9pt;">Heatmap not available</div>'
+            )
+
+            def titled_image_block(title: str, image_html: str, margin_top: str = "0") -> str:
+                return (
+                    '<div style="page-break-inside:avoid;break-inside:avoid-page;'
+                    f'margin-top:{margin_top};">'
+                    f'<div style="font-size:8pt;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 6px;">{title}</div>'
+                    '<div style="border:1px solid #d1d5db;padding:12px;background:#fafafa;">'
+                    f'{image_html}'
+                    '</div>'
+                    '</div>'
+                )
+
+            return (
+                '<div class="imageBlock" style="border:1px solid #d1d5db;border-radius:6px;background:#ffffff;margin-bottom:14px;padding:12px 14px;">'
+                '<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px;"><tr>'
+                f'<td style="font-size:9pt;font-weight:700;color:#111827;">{esc(eye_name or "Eye")}</td>'
+                '<td align="right">'
+                '<span style="font-size:8pt;color:#6b7280;font-weight:600;">AI Results:&nbsp;</span>'
+                f'<span style="font-size:9pt;font-weight:700;color:#111827;">{esc(eye_grade)}</span>'
+                '</td>'
+                '</tr></table>'
+                f'<div style="font-size:8.5pt;color:#4b5563;margin-bottom:10px;">Confidence: <span style="font-weight:600;color:#374151;">{esc(eye_conf)}</span></div>'
+                f'{titled_image_block("Fundus", source_html)}'
+                f'{titled_image_block("Heatmap", heat_html, "12px")}'
+                '</div>'
+            )
+
+        if is_bilateral_report:
+            fundus_images_html = (
+                f'{sec("Bilateral Fundus Images")}'
+                + _render_eye_image_pair(first_eye_label, first_eye_result, first_eye_confidence, first_source_image_uri, first_heatmap_image_uri)
+                + _render_eye_image_pair(second_eye_label, second_eye_result, second_eye_confidence, source_image_uri, heatmap_image_uri)
+            )
+        else:
+            fundus_images_html = (
+                f'{sec("Fundus Images")}'
+                + _render_eye_image_pair(second_eye_label, second_eye_result, second_eye_confidence, source_image_uri, heatmap_image_uri)
+            )
 
         # Report-tab-matching palette and structure
         _COL = {
@@ -1766,6 +2033,10 @@ img {{
     height: auto;
     display: block;
 }}
+.imageBlock {{
+    page-break-inside: avoid;
+    break-inside: avoid-page;
+}}
 </style></head><body>
 
 <!-- Header -->
@@ -1796,7 +2067,7 @@ img {{
     ("Height", height_disp),
     ("Weight", weight_disp),
     ("BMI", bmi_disp),
-    ("Eye Screened", esc(self._current_eye_label or "—")),
+    ("Eye Screened", esc(combined_eye_display or "—")),
     ("Screening Date", report_date),
     ("", "")
 ])}
@@ -1833,6 +2104,11 @@ img {{
     <div style="font-size:9pt;color:#374151;">{symptom_html}</div>
 </div>
 
+{sec("Other Symptom Details")}
+<div style="padding:12px;border:1px solid #d1d5db;background:#fafafa;margin-bottom:18px;min-height:44px;">
+    <div style="font-size:9pt;color:#4b5563;line-height:1.65;">{other_symptom_disp}</div>
+</div>
+
 <!-- AI Classification Result -->
 {sec("AI Classification Result")}
 <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d1d5db;margin-bottom:18px;">
@@ -1847,6 +2123,11 @@ img {{
 {field_row("Doctor Findings", esc(findings_note or "—"))}
 {field_row("Final Diagnosis", esc("Based on ICDR Severity Scale"), False)}
 </table>
+
+{sec("Doctor Comments")}
+<div style="padding:12px;border:1px solid #d1d5db;background:#fafafa;margin-bottom:18px;min-height:44px;">
+    <div style="font-size:9pt;color:#4b5563;line-height:1.65;">{esc(findings_note) if findings_note else "&mdash;"}</div>
+</div>
 
 <div style="padding:10px 12px;border:1px solid #d1d5db;margin-bottom:18px;background:#fafafa;">
     <div style="font-size:8.5pt;color:#374151;">
@@ -1866,50 +2147,7 @@ img {{
 """
         html += f"""
 
-<!-- Fundus Images -->
-{sec("Fundus Images")}
-<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:18px;">
-<tr>
-    <td width="50%" valign="top" style="padding-right:10px;">
-        <div style="border:1px solid #d1d5db;padding:12px;background:#fafafa;">
-            <div style="font-size:8pt;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Source Fundus Image</div>"""
-
-        if source_image_uri:
-            html += f"""
-            <div style="text-align:center;background:#ffffff;padding:8px;border:1px solid #e5e7eb;">
-                <img src="{source_image_uri}" style="max-width:100%;max-height:220px;width:auto;height:auto;" />
-            </div>"""
-        else:
-            html += """
-            <div style="text-align:center;background:#ffffff;padding:30px;border:1px solid #e5e7eb;color:#9ca3af;font-style:italic;font-size:9pt;">
-                Image not available
-            </div>"""
-        
-        html += f"""
-            <div style="font-size:8pt;color:#6b7280;margin-top:6px;font-style:italic;">{esc(self._current_eye_label or 'Right eye')} fundus photograph</div>
-        </div>
-    </td>
-    <td width="50%" valign="top" style="padding-left:10px;">
-        <div style="border:1px solid #d1d5db;padding:12px;background:#fafafa;">
-            <div style="font-size:8pt;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Grad-CAM++ Heatmap</div>"""
-        
-        if heatmap_image_uri:
-            html += f"""
-            <div style="text-align:center;background:#ffffff;padding:8px;border:1px solid #e5e7eb;">
-                <img src="{heatmap_image_uri}" style="max-width:100%;max-height:220px;width:auto;height:auto;" />
-            </div>"""
-        else:
-            html += """
-            <div style="text-align:center;background:#ffffff;padding:30px;border:1px solid #e5e7eb;color:#9ca3af;font-style:italic;font-size:9pt;">
-                Heatmap not available
-            </div>"""
-        
-        html += """
-            <div style="font-size:8pt;color:#6b7280;margin-top:6px;font-style:italic;">Model attention overlay</div>
-        </div>
-    </td>
-</tr>
-</table>
+{fundus_images_html}
 
 <!-- Clinical Analysis -->
 {sec("Clinical Analysis")}
@@ -2011,13 +2249,13 @@ img {{
                 pass
 
     def _show_referral_options(self):
-        """Show dialog to choose between internal referral or generating letter"""
+        """Show dialog to choose between internal clinical handoff or generating referral letter."""
         if self._current_result_class in ("Pending", "Analyzing…") or not self._current_image_path:
-            QMessageBox.information(self, "Referral", "No completed screening results to refer.")
+            QMessageBox.information(self, "Referral", "No completed screening result available for handoff.")
             return
 
         if self.parent_page and not getattr(self.parent_page, "_current_eye_saved", False):
-            QMessageBox.warning(self, "Referral", "Please save the result before generating a referral")
+            QMessageBox.warning(self, "Referral", "Please save the result before creating a handoff.")
             return
 
         try:
@@ -2035,9 +2273,9 @@ img {{
                 self.generate_referral()
 
     def _show_internal_referral(self):
-        """Show dialog to assign referral to a clinician internally"""
+        """Show dialog to assign an internal clinical handoff."""
         if not self._current_patient_name:
-            QMessageBox.warning(self, "Error", "Patient name not available")
+            QMessageBox.warning(self, "Clinical Handoff", "Patient name is not available.")
             return
 
         try:
@@ -2046,32 +2284,71 @@ img {{
             from .login import AssignReferralDialog
         
         patient_name_raw = str(self._current_patient_name or "Patient").strip()
-        username = getattr(self.parent_page, "username", "clinician") if self.parent_page else "clinician"
+        username = self._resolve_actor_username()
+        if not username:
+            QMessageBox.warning(self, "Clinical Handoff", "Current logged-in user could not be resolved. Please sign in again.")
+            return
         
-        dialog = AssignReferralDialog(patient_name_raw, self, exclude_username=username)
-        if dialog.exec() == QDialog.Accepted:
-            if dialog.selected_clinician == username:
-                QMessageBox.warning(self, "Referral", "You cannot assign a referral to yourself.")
+        while True:
+            dialog = AssignReferralDialog(patient_name_raw, self, exclude_username=username)
+            if dialog.exec() != QDialog.Accepted:
+                if getattr(dialog, "go_back", False):
+                    self._show_referral_options()
                 return
+
+            if dialog.selected_clinician == username:
+                QMessageBox.warning(self, "Clinical Handoff", "You cannot assign a handoff to yourself.")
+                continue
+
+            duplicate = UserManager.find_active_duplicate_referral(patient_name_raw, dialog.selected_clinician)
+            if duplicate:
+                status_map = {
+                    "pending": "Pending",
+                    "viewed": "Viewed",
+                    "in_review": "In Review",
+                    "completed": "Completed",
+                    "archived": "Archived",
+                }
+                status_raw = str(duplicate.get("status") or "pending").strip().lower()
+                status_label = status_map.get(status_raw, status_raw.replace("_", " ").title())
+                existing_referral_id = str(duplicate.get("referral_id") or "").strip()
+                confirm = QMessageBox.question(
+                    self,
+                    "Duplicate Handoff",
+                    (
+                        f"{patient_name_raw} already has an active handoff to this clinician "
+                        f"(Referral ID: {existing_referral_id}, Status: {status_label}).\n\n"
+                        "Create another handoff anyway?"
+                    ),
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if confirm != QMessageBox.Yes:
+                    continue
+
             # Create referral assignment
             referral_id = f"REF-{datetime.now().strftime('%Y%m%d%H%M%S')}-INTERNAL"
+            base_note = "Assigned from screening results"
+            extra_note = str(getattr(dialog, "notes_text", "") or "").strip()
+            notes_value = f"{base_note}\nAdditional comments: {extra_note}" if extra_note else base_note
             success = UserManager.assign_referral(
                 referral_id=referral_id,
                 assigned_to_username=dialog.selected_clinician,
                 assigned_by_username=username,
                 patient_name=patient_name_raw,
                 urgency=dialog.urgency_level,
-                notes=f"Assigned from screening results"
+                notes=notes_value,
             )
             if success:
                 QMessageBox.information(
                     self,
-                    "Referral Assigned",
-                    f"Patient referral assigned successfully to clinician."
+                    "Clinical Handoff Assigned",
+                    "Patient handoff assigned successfully to clinician."
                 )
                 write_activity("INFO", "INTERNAL_REFERRAL_ASSIGNED", f"patient={patient_name_raw}")
-            else:
-                QMessageBox.warning(self, "Error", "Failed to assign referral. It may already be assigned.")
+                return
+
+            QMessageBox.warning(self, "Clinical Handoff", "Failed to assign handoff. It may already be assigned.")
 
     def generate_referral(self):
         """Generate a referral letter PDF from screening results."""
@@ -2086,6 +2363,9 @@ img {{
         destination = self._prompt_referral_destination()
         if not destination:
             return
+        if destination.get("_action") == "back":
+            self._show_referral_options()
+            return
 
         # Get patient data from parent page
         patient_name_raw = str(self._current_patient_name or "Patient").strip()
@@ -2093,6 +2373,8 @@ img {{
         path, _ = QFileDialog.getSaveFileName(self, "Save Referral Letter", default_name, "PDF Files (*.pdf)")
         if not path:
             return
+        if not path.lower().endswith(".pdf"):
+            path = f"{path}.pdf"
 
         try:
             from PySide6.QtGui import QPdfWriter, QPageSize, QPageLayout, QTextDocument
@@ -2124,7 +2406,10 @@ img {{
             return raw
 
         # Get username from parent or default
-        username = getattr(self.parent_page, "username", "clinician") if self.parent_page else "clinician"
+        username = self._resolve_actor_username()
+        if not username:
+            QMessageBox.warning(self, "Generate Referral", "Current logged-in user could not be resolved. Please sign in again.")
+            return
 
         # Fetch doctor's profile
         profile = UserManager.get_user_profile(username) or {}
@@ -2157,6 +2442,7 @@ img {{
         if self.parent_page and hasattr(self.parent_page, "_patient_data"):
             patient_data = self.parent_page._patient_data or {}
 
+        patient_dob = esc(patient_data.get("birthdate") or patient_data.get("dob") or "")
         patient_age = esc(patient_data.get("age") or "")
         patient_sex = esc(patient_data.get("sex") or "")
         patient_hba1c = esc(patient_data.get("hba1c") or "")
@@ -2166,7 +2452,10 @@ img {{
         patient_bmi = esc(patient_data.get("bmi") or "")
         patient_visual_acuity_left = esc(patient_data.get("visual_acuity_left") or "")
         patient_visual_acuity_right = esc(patient_data.get("visual_acuity_right") or "")
-        patient_notes = esc(patient_data.get("notes") or "")
+        patient_notes_raw = str(patient_data.get("notes") or "").strip()
+        if len(patient_notes_raw) > 220:
+            patient_notes_raw = f"{patient_notes_raw[:217].rstrip()}..."
+        patient_notes = esc(patient_notes_raw)
 
         hospital_name = str(destination.get("hospital_name") or "").strip() or "Ophthalmology Clinic"
         hospital_dept = str(destination.get("department") or "").strip() or "Ophthalmology Department"
@@ -2175,10 +2464,83 @@ img {{
         destination_name = esc(hospital_name)
         destination_dept = esc(hospital_dept)
         destination_contact = esc(hospital_contact)
-        referral_image_uri = ""
+        current_source_uri = ""
+        current_heatmap_uri = ""
         image_path = str(self._current_image_path or "").strip()
+        heatmap_path = str(self._current_heatmap_path or "").strip()
         if image_path and os.path.exists(image_path):
-            referral_image_uri = Path(image_path).resolve().as_uri()
+            current_source_uri = Path(image_path).resolve().as_uri()
+        if heatmap_path and os.path.exists(heatmap_path):
+            current_heatmap_uri = Path(heatmap_path).resolve().as_uri()
+
+        first_eye_ctx = dict(getattr(self, "_first_eye_context", {}) or {})
+        first_eye_label = str(first_eye_ctx.get("eye") or "").strip()
+        first_source_uri = ""
+        first_heatmap_uri = ""
+        first_source_path = str(first_eye_ctx.get("image_path") or "").strip()
+        first_heatmap_path = str(first_eye_ctx.get("heatmap_path") or "").strip()
+        if first_source_path and os.path.exists(first_source_path):
+            first_source_uri = Path(first_source_path).resolve().as_uri()
+        if first_heatmap_path and os.path.exists(first_heatmap_path):
+            first_heatmap_uri = Path(first_heatmap_path).resolve().as_uri()
+
+        second_eye_label = str(self._current_eye_label or "").strip() or "Current Eye"
+        is_bilateral_referral = bool(first_eye_label)
+
+        def _scaled_referral_image(uri: str, file_path: str, missing_text: str) -> str:
+            if not uri:
+                return f'<div style="padding:26px 14px;color:#9ca3af;font-style:italic;">{missing_text}</div>'
+
+            max_w, max_h = 380, 280
+            width, height = max_w, max_h
+            if file_path and os.path.exists(file_path):
+                image = QImage(file_path)
+                if not image.isNull() and image.width() > 0 and image.height() > 0:
+                    ratio = min(max_w / image.width(), max_h / image.height())
+                    ratio = min(ratio, 1.0)
+                    width = max(1, int(image.width() * ratio))
+                    height = max(1, int(image.height() * ratio))
+
+            return (
+                f'<img src="{uri}" width="{width}" height="{height}" '
+                'style="display:block;margin:0 auto;border-radius:2px;" />'
+            )
+
+        def _normalize_eye_label(eye_label_value: str) -> str:
+            eye_name = str(eye_label_value or "").strip().lower()
+            if eye_name in ("left", "left eye", "os"):
+                return "Left Eye"
+            if eye_name in ("right", "right eye", "od"):
+                return "Right Eye"
+            return str(eye_label_value or "Eye").strip() or "Eye"
+
+        def _referral_eye_block(eye_label_value: str, source_uri: str, source_path: str) -> str:
+            source_html = _scaled_referral_image(source_uri, source_path, "Fundus image not available")
+            return f"""
+    <div class=\"image-box keep-together\">
+        <div style=\"font-size:9.2pt;font-weight:700;color:#1f2937;margin-bottom:10px;\">{esc(_normalize_eye_label(eye_label_value))}</div>
+        <div style=\"font-size:8pt;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;\">Fundus Image</div>
+        <div style="text-align:center;background:#ffffff;padding:8px;border:1px solid #e5e7eb;min-height:230px;">{source_html}</div>
+    </div>
+"""
+
+        if is_bilateral_referral:
+            referral_images_html = (
+                "<div class=\"subject\">Bilateral Fundus Images Captured</div>"
+                "<div class=\"paragraph\">"
+                "The following retinal fundus images from both screened eyes are attached for specialist reference."
+                "</div>"
+                + _referral_eye_block(first_eye_label, first_source_uri, first_source_path)
+                + _referral_eye_block(second_eye_label, current_source_uri, image_path)
+            )
+        else:
+            referral_images_html = (
+                "<div class=\"subject\">Fundus Image Captured</div>"
+                "<div class=\"paragraph\">"
+                "The following retinal fundus image was captured during this screening encounter and is attached for specialist reference."
+                "</div>"
+                + _referral_eye_block(second_eye_label, current_source_uri, image_path)
+            )
 
         html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
@@ -2190,26 +2552,27 @@ body {{
     padding: 0;
     line-height: 1.6;
 }}
-.sheet {{ padding: 26px 36px; }}
+.sheet {{ padding: 20px 30px; }}
 .page-break {{ page-break-before: always; }}
 .header-grid {{ width: 100%; border-collapse: collapse; margin-bottom: 14px; }}
 .header-grid td {{ width: 100%; vertical-align: top; padding: 0; }}
 .header-block {{ font-size: 10.8pt; line-height: 1.65; }}
 .date-line {{ font-size: 10.8pt; line-height: 1.65; margin-bottom: 8px; }}
 .label {{ font-weight: 700; }}
-.subject {{ margin: 14px 0 14px 0; font-size: 11.5pt; font-weight: 700; }}
-.paragraph {{ margin: 0 0 12px 0; text-align: justify; line-height: 1.7; }}
+.subject {{ margin: 10px 0 10px 0; font-size: 11pt; font-weight: 700; }}
+.paragraph {{ margin: 0 0 8px 0; text-align: justify; line-height: 1.45; }}
 .patient-box {{
     border: 1px solid #d1d5db;
     background: #fafafa;
     padding: 12px 14px;
-    margin: 16px 0 16px 0;
+    margin: 10px 0 10px 0;
 }}
 .patient-box table {{ width: 100%; border-collapse: collapse; }}
-.patient-box td {{ padding: 5px 0; vertical-align: top; font-size: 10pt; line-height: 1.6; }}
-.closing {{ margin-top: 24px; }}
-.signature-line {{ margin-top: 34px; border-top: 1px solid #374151; width: 260px; }}
-.image-box {{ border: 1px solid #d1d5db; background: #fafafa; padding: 12px 14px; margin: 10px 0 16px 0; }}
+.patient-box td {{ padding: 4px 0; vertical-align: top; font-size: 9.5pt; line-height: 1.35; }}
+.closing {{ margin-top: 12px; }}
+.signature-line {{ margin-top: 20px; border-top: 1px solid #374151; width: 260px; }}
+.keep-together {{ page-break-inside: avoid; break-inside: avoid-page; }}
+.image-box {{ border: 1px solid #d1d5db; background: #fafafa; padding: 12px 14px; margin: 10px 0 16px 0; page-break-inside: avoid; break-inside: avoid-page; }}
 .image-caption {{ font-size: 9pt; color: #4b5563; margin-top: 8px; text-align: center; }}
 </style>
 </head>
@@ -2240,23 +2603,12 @@ body {{
     <div class="patient-box">
         <table>
             <tr>
-                <td style="width:50%;"><span class="label">Patient Name:</span> {patient_name_raw}</td>
-                <td><span class="label">Age / Sex:</span> {patient_age} / {patient_sex}</td>
+                <td style="width:50%;"><span class="label">Patient Name:</span> {esc(patient_name_raw)}</td>
+                <td><span class="label">Date of Birth:</span> {patient_dob}</td>
             </tr>
             <tr>
-                <td><span class="label">Diabetes Type:</span> {patient_diabetes_type}</td>
-                <td><span class="label">HbA1c:</span> {patient_hba1c}</td>
-            </tr>
-            <tr>
-                <td><span class="label">Height:</span> {patient_height}</td>
-                <td><span class="label">Weight:</span> {patient_weight}</td>
-            </tr>
-            <tr>
-                <td><span class="label">BMI:</span> {patient_bmi}</td>
-                <td><span class="label">Visual Acuity:</span> {patient_visual_acuity_left} / {patient_visual_acuity_right}</td>
-            </tr>
-            <tr>
-                <td colspan="2"><span class="label">Clinical History & Symptoms:</span> {patient_notes}</td>
+                <td style="width:50%;"><span class="label">Age:</span> {patient_age}</td>
+                <td><span class="label">Sex:</span> {patient_sex}</td>
             </tr>
             <tr>
                 <td colspan="2"><span class="label">Referral Reason:</span> {esc(rationale)}</td>
@@ -2270,7 +2622,7 @@ body {{
         assessment. If you need to reach me, contact me at {esc(doctor_contact)}.
     </div>
 
-    <div class="closing">
+    <div class="closing keep-together">
         <div style="margin-bottom:8px;">Sincerely,</div>
         <div class="signature-line"></div>
         <div style="margin-top:8px;"><b>{esc(screened_by_label)}</b></div>
@@ -2281,16 +2633,7 @@ body {{
 <div class="page-break"></div>
 
 <div class="sheet">
-    <div class="subject">Fundus Image Captured</div>
-    <div class="paragraph">
-        The following retinal fundus image was captured during this screening encounter and is attached for specialist reference.
-    </div>
-    <div class="image-box">
-        <div style="text-align:center;background:#ffffff;padding:8px;border:1px solid #e5e7eb;">
-            {f'<img src="{referral_image_uri}" style="max-width:100%;max-height:560px;width:auto;height:auto;" />' if referral_image_uri else '<div style="padding:80px 20px;color:#9ca3af;font-style:italic;">Fundus image not available</div>'}
-        </div>
-        <div class="image-caption">Captured fundus image</div>
-    </div>
+    {referral_images_html}
 
     <div style="font-size:10pt;color:#4b5563;margin-top:20px;line-height:1.8;">
         <span><b>Created by:</b> {esc(screened_by_label)}</span><br>
@@ -2317,6 +2660,14 @@ body {{
             pass
 
         doc.print_(writer)
+        del writer
+        if not os.path.exists(path) or os.path.getsize(path) == 0:
+            QMessageBox.warning(
+                self,
+                "Generate Referral",
+                "Referral PDF was not created. Please choose a writable folder and try again.",
+            )
+            return
         write_activity("INFO", "REFERRAL_GENERATED", f"path={path}")
         referral_id = f"REF-{datetime.now().strftime('%Y%m%d%H%M%S')}-LETTER"
         UserManager.log_external_referral_letter(
@@ -2336,21 +2687,21 @@ body {{
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Referral Destination")
-        dialog.resize(580, 340)
+        dialog.resize(560, 260)
 
         layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(6)
 
-        subtitle = QLabel("Choose a referral hospital/clinic or use manual entry.")
+        subtitle = QLabel("Choose referral hospital/clinic etc")
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet("color:#4f637a;font-size:12px;")
         layout.addWidget(subtitle)
 
-        hospital_label = QLabel("Referral Hospital / Clinic")
+        hospital_label = QLabel("Referral Hospital/Clinic")
         hospital_label.setStyleSheet("font-size:11px;font-weight:700;color:#2f4054;")
         hospital_combo = QComboBox()
-        hospital_combo.setMinimumHeight(36)
+        hospital_combo.setMinimumHeight(34)
         for item in hospitals:
             dept = str(item.get("department") or "").strip()
             label = str(item.get("hospital_name") or "").strip()
@@ -2366,7 +2717,7 @@ body {{
         manual_wrap = QWidget()
         manual_layout = QVBoxLayout(manual_wrap)
         manual_layout.setContentsMargins(0, 0, 0, 0)
-        manual_layout.setSpacing(8)
+        manual_layout.setSpacing(6)
 
         manual_layout.addWidget(QLabel("Manual Destination Details"))
         manual_name = QLineEdit()
@@ -2381,14 +2732,24 @@ body {{
         layout.addWidget(manual_wrap)
 
         action_row = QHBoxLayout()
-        action_row.addStretch(1)
+        action_row.setSpacing(6)
+        back_btn = QPushButton("Back")
         cancel_btn = QPushButton("Cancel")
         continue_btn = QPushButton("Continue")
         continue_btn.setObjectName("primaryAction")
+        action_row.addWidget(back_btn)
+        action_row.addStretch(1)
         action_row.addWidget(cancel_btn)
         action_row.addWidget(continue_btn)
         layout.addLayout(action_row)
 
+        dialog._go_back = False
+
+        def _on_back_clicked():
+            dialog._go_back = True
+            dialog.reject()
+
+        back_btn.clicked.connect(_on_back_clicked)
         cancel_btn.clicked.connect(dialog.reject)
         continue_btn.clicked.connect(dialog.accept)
 
@@ -2403,6 +2764,8 @@ body {{
 
         while True:
             if dialog.exec() != QDialog.DialogCode.Accepted:
+                if getattr(dialog, "_go_back", False):
+                    return {"_action": "back"}
                 return None
             selected = hospital_combo.currentData()
             if selected is None:

@@ -3252,6 +3252,16 @@ class ActivityLogPage(QWidget):
                 QMessageBox.warning(self, "Export Activity Log", "Reason is required for large exports.")
                 return
 
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Export",
+            f"Export {len(entries)} activity log entries to CSV?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
         acting_password = UsersPage.prompt_for_admin_password(self, "export the activity log")
         if acting_password is None:
             return

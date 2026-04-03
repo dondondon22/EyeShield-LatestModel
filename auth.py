@@ -719,6 +719,28 @@ class UserManager:
         return row[0] if row else None
 
     @staticmethod
+    def resolve_username(username: str) -> str:
+        """Return canonical username from DB (case-insensitive lookup) when available."""
+        raw = str(username or "").strip()
+        if not raw:
+            return ""
+
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT username FROM users WHERE lower(username) = lower(?) LIMIT 1",
+                (raw,),
+            )
+            row = cur.fetchone()
+            resolved = str(row[0] or "").strip() if row else ""
+            return resolved or raw
+        except sqlite3.Error:
+            return raw
+        finally:
+            conn.close()
+
+    @staticmethod
     def _verify_admin_actor(
         conn: sqlite3.Connection,
         acting_username: Optional[str],
@@ -1672,6 +1694,15 @@ class UserManager:
         )
 
     @staticmethod
+    def find_active_duplicate_referral(patient_name: str, assigned_to_username: str) -> dict | None:
+        """Find active referral for the same patient-assignee pair."""
+        return ReferralService.find_active_duplicate_referral(
+            get_connection=get_connection,
+            patient_name=patient_name,
+            assigned_to_username=assigned_to_username,
+        )
+
+    @staticmethod
     def get_pending_referrals(username: str) -> list[dict]:
         """Get pending and actionable referrals for a clinician."""
         return ReferralService.get_pending_referrals(get_connection=get_connection, username=username)
@@ -1760,6 +1791,45 @@ class UserManager:
             acting_username=acting_username,
             reason=reason,
             reason_code=reason_code,
+        )
+
+    @staticmethod
+    def update_referral_details(
+        referral_id: str,
+        actor_username: str,
+        urgency: str = "",
+        notes: str = "",
+    ) -> bool:
+        """Update referral details on the latest episode (creator-only)."""
+        return ReferralService.update_referral_details(
+            get_connection=get_connection,
+            add_activity_log=UserManager.add_activity_log,
+            referral_id=referral_id,
+            actor_username=actor_username,
+            urgency=urgency,
+            notes=notes,
+        )
+
+    @staticmethod
+    def delete_referral(referral_id: str, actor_username: str, reason: str = "") -> bool:
+        """Archive (soft-delete) referral latest episode (creator-only)."""
+        return ReferralService.delete_referral(
+            get_connection=get_connection,
+            add_activity_log=UserManager.add_activity_log,
+            referral_id=referral_id,
+            actor_username=actor_username,
+            reason=reason,
+        )
+
+    @staticmethod
+    def delete_archived_referral(referral_id: str, actor_username: str, note: str = "") -> bool:
+        """Permanently delete archived referral (creator-only)."""
+        return ReferralService.purge_archived_referral(
+            get_connection=get_connection,
+            add_activity_log=UserManager.add_activity_log,
+            referral_id=referral_id,
+            actor_username=actor_username,
+            note=note,
         )
 
     @staticmethod

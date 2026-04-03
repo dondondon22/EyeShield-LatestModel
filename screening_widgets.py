@@ -3,7 +3,7 @@ Custom widgets for the screening module.
 """
 
 from PySide6.QtWidgets import (
-    QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QDialog, QScrollArea, QStyle
+    QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout, QDialog, QScrollArea, QStyle
 )
 from PySide6.QtGui import QPixmap, QPainter, QPen, QColor
 from PySide6.QtCore import Qt, QSize, QEvent
@@ -131,68 +131,72 @@ class ImageZoomDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
 
-        controls = QHBoxLayout()
-        controls.setSpacing(8)
+        toolbar_grid = QGridLayout()
+        toolbar_grid.setHorizontalSpacing(12)
+        toolbar_grid.setVerticalSpacing(6)
 
-        zoom_in_btn = QPushButton()
-        zoom_in_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowUp))
-        zoom_in_btn.setIconSize(QSize(18, 18))
-        zoom_in_btn.setToolTip("Zoom in")
-        zoom_in_btn.setFixedSize(38, 38)
+        tools_label = QLabel("Tools")
+        tools_label.setStyleSheet("font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;")
+        toolbar_grid.addWidget(tools_label, 0, 0)
+
+        colors_label = QLabel("Colors")
+        colors_label.setStyleSheet("font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;")
+        toolbar_grid.addWidget(colors_label, 0, 1)
+
+        tools_row = QHBoxLayout()
+        tools_row.setSpacing(8)
+        magnify_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
+
+        zoom_in_btn = QPushButton("Zoom +")
+        zoom_in_btn.setIcon(magnify_icon)
+        zoom_in_btn.setIconSize(QSize(16, 16))
+        zoom_in_btn.setToolTip("Magnifying zoom in")
+        zoom_in_btn.setMinimumHeight(34)
         zoom_in_btn.clicked.connect(self.zoom_in)
-        controls.addWidget(zoom_in_btn)
+        tools_row.addWidget(zoom_in_btn)
 
-        zoom_out_btn = QPushButton()
-        zoom_out_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowDown))
-        zoom_out_btn.setIconSize(QSize(18, 18))
-        zoom_out_btn.setToolTip("Zoom out")
-        zoom_out_btn.setFixedSize(38, 38)
+        zoom_out_btn = QPushButton("Zoom -")
+        zoom_out_btn.setIcon(magnify_icon)
+        zoom_out_btn.setIconSize(QSize(16, 16))
+        zoom_out_btn.setToolTip("Magnifying zoom out")
+        zoom_out_btn.setMinimumHeight(34)
         zoom_out_btn.clicked.connect(self.zoom_out)
-        controls.addWidget(zoom_out_btn)
+        tools_row.addWidget(zoom_out_btn)
+        tools_row.addStretch(1)
+        toolbar_grid.addLayout(tools_row, 1, 0)
 
-        reset_btn = QPushButton()
-        reset_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
-        reset_btn.setIconSize(QSize(18, 18))
-        reset_btn.setToolTip("Reset zoom")
-        reset_btn.setFixedSize(38, 38)
-        reset_btn.clicked.connect(self.reset_zoom)
-        controls.addWidget(reset_btn)
-
-        draw_btn = QPushButton("✏")
-        draw_btn.setCheckable(True)
-        draw_btn.setToolTip("Draw annotations")
-        draw_btn.setFixedSize(38, 38)
-        draw_btn.setStyleSheet("font-size: 16px;")
-        draw_btn.toggled.connect(self.toggle_draw_mode)
-        controls.addWidget(draw_btn)
-        self._draw_btn = draw_btn
-
+        colors_row = QHBoxLayout()
+        colors_row.setSpacing(8)
         self._swatches = []
         for _hex, _name in _PEN_COLORS:
             _sw = QPushButton()
-            _sw.setFixedSize(22, 22)
+            _sw.setFixedSize(24, 24)
             _sw.setToolTip(_name)
             _border = "3px solid #0d6efd" if _hex == _PEN_COLORS[0][0] else "2px solid #adb5bd"
-            _sw.setStyleSheet(f"background:{_hex};border-radius:11px;border:{_border};")
+            _sw.setStyleSheet(f"background:{_hex};border-radius:12px;border:{_border};")
             _sw.clicked.connect(lambda checked=False, h=_hex: self._set_pen_color(h))
-            controls.addWidget(_sw)
+            colors_row.addWidget(_sw)
             self._swatches.append((_sw, _hex))
-
-        clear_draw_btn = QPushButton()
+        clear_draw_btn = QPushButton("Clear")
         clear_draw_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogDiscardButton))
-        clear_draw_btn.setIconSize(QSize(18, 18))
+        clear_draw_btn.setIconSize(QSize(16, 16))
         clear_draw_btn.setToolTip("Clear drawings")
-        clear_draw_btn.setFixedSize(38, 38)
+        clear_draw_btn.setMinimumHeight(34)
         clear_draw_btn.clicked.connect(self.clear_drawings)
-        controls.addWidget(clear_draw_btn)
-
-        controls.addStretch()
+        colors_row.addWidget(clear_draw_btn)
+        colors_row.addStretch(1)
+        toolbar_grid.addLayout(colors_row, 1, 1)
 
         close_btn = QPushButton("Close")
+        close_btn.setMinimumHeight(34)
         close_btn.clicked.connect(self.accept)
-        controls.addWidget(close_btn)
+        toolbar_grid.addWidget(close_btn, 1, 2)
 
-        layout.addLayout(controls)
+        toolbar_grid.setColumnStretch(0, 3)
+        toolbar_grid.setColumnStretch(1, 3)
+        toolbar_grid.setColumnStretch(2, 1)
+
+        layout.addLayout(toolbar_grid)
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(False)
@@ -244,9 +248,9 @@ class ImageZoomDialog(QDialog):
         self.image_label.set_pen_color(QColor(hex_color))
         for sw, h in self._swatches:
             border = "3px solid #0d6efd" if h == hex_color else "2px solid #adb5bd"
-            sw.setStyleSheet(f"background:{h};border-radius:11px;border:{border};")
-        # Clicking a color automatically activates draw mode
-        self._draw_btn.setChecked(True)
+            sw.setStyleSheet(f"background:{h};border-radius:12px;border:{border};")
+        # Clicking a color automatically activates draw mode.
+        self.image_label.set_draw_enabled(True)
 
 
 class ClickableImageLabel(QLabel):

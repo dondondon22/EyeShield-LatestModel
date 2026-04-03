@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QStackedWidget, QGroupBox, QMessageBox, QProgressBar, QSizePolicy,
     QFrame, QMenu, QInputDialog, QTableWidget, QTableWidgetItem, QAbstractItemView,
-    QHeaderView, QDialog, QApplication
+    QHeaderView, QDialog, QApplication, QLineEdit
 )
 from PySide6.QtCore import Qt, QSize, QByteArray, QEvent, QTimer, QCoreApplication
 from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont, QShortcut, QKeySequence, QColor, QGuiApplication
@@ -338,6 +338,9 @@ class EyeShieldApp(QMainWindow):
 
         # Create main pages first so dashboard can query live data
         self.screening_page = ScreeningPage()
+        self.screening_page.username = self.username
+        self.screening_page.display_name = self.display_name
+        self.screening_page.role = self.role
         self.camera_page = CameraPage()
         self.reports_page = ReportsPage(
             self.username,
@@ -1082,34 +1085,9 @@ class EyeShieldApp(QMainWindow):
         if getattr(self, '_logging_out', False):
             event.accept()
             return
-        if hasattr(self, "screening_page") and hasattr(self.screening_page, "has_unsaved_result"):
-            if self.screening_page.has_unsaved_result():
-                box = QMessageBox(self)
-                box.setWindowTitle("Unsaved Results")
-                box.setIcon(QMessageBox.Icon.Warning)
-                box.setText("You have unsaved results. Close anyway?")
-                save_close_btn = box.addButton("Save and Close", QMessageBox.ButtonRole.AcceptRole)
-                close_btn = box.addButton("Close Without Saving", QMessageBox.ButtonRole.DestructiveRole)
-                cancel_btn = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-                box.setDefaultButton(cancel_btn)
-                box.exec()
-
-                chosen = box.clickedButton()
-                if chosen == save_close_btn:
-                    if hasattr(self.screening_page, "save_screening"):
-                        result = self.screening_page.save_screening(reset_after=False)
-                        if isinstance(result, dict) and result.get("status") == "saved":
-                            event.accept()
-                        else:
-                            event.ignore()
-                    else:
-                        event.ignore()
-                    return
-                if chosen == close_btn:
-                    event.accept()
-                else:
-                    event.ignore()
-                return
+        if self._confirm_quit_during_screening():
+            event.ignore()
+            return
         reply = QMessageBox.question(
             self,
             "Quit EyeShield",
@@ -1123,6 +1101,9 @@ class EyeShieldApp(QMainWindow):
             event.ignore()
 
     def handle_logout(self):
+        if self._confirm_quit_during_screening():
+            return
+
         reply = QMessageBox.question(
             self,
             "Logout",
@@ -1148,6 +1129,43 @@ class EyeShieldApp(QMainWindow):
         self.login = LoginWindow()
         self.login.show()
         self.close()
+
+    def _is_screening_ongoing_context(self) -> bool:
+        if not hasattr(self, "screening_page"):
+            return False
+
+        page = self.screening_page
+        on_screening_tab = bool(hasattr(self, "pages") and self.pages.currentIndex() == 1)
+        on_results_screen = bool(
+            on_screening_tab
+            and hasattr(page, "stacked_widget")
+            and page.stacked_widget.currentIndex() == 1
+        )
+        has_unsaved = bool(hasattr(page, "has_unsaved_result") and page.has_unsaved_result())
+        analysis_busy = bool(hasattr(page, "is_navigation_locked") and page.is_navigation_locked())
+        return bool(on_results_screen or has_unsaved or analysis_busy)
+
+    def _confirm_quit_during_screening(self) -> bool:
+        """Return True when quit/logout should be aborted."""
+        if not self._is_screening_ongoing_context():
+            return False
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Screening Ongoing")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText("Screening is on going. Do you really want to quit application?")
+        no_btn = box.addButton("No, back to screening", QMessageBox.ButtonRole.RejectRole)
+        yes_btn = box.addButton("Yes", QMessageBox.ButtonRole.DestructiveRole)
+        box.setDefaultButton(no_btn)
+        box.exec()
+
+        if box.clickedButton() == yes_btn:
+            return False
+
+        if hasattr(self, "pages"):
+            self.pages.setCurrentIndex(1)
+            self._set_active_nav(1)
+        return True
 
     def _setup_inactivity_timeout(self):
         self._inactivity_timer = QTimer(self)
@@ -1423,6 +1441,36 @@ class EyeShieldApp(QMainWindow):
                 pass
         return datetime.now(timezone(timedelta(hours=8)))
 
+    @staticmethod
+    def _format_referral_datetime(value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return "-"
+
+        target_tz = EyeShieldApp._ph_now().tzinfo
+        parsed = None
+        normalized = raw.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                try:
+                    parsed = datetime.strptime(raw, fmt)
+                    break
+                except ValueError:
+                    continue
+
+        if parsed is None:
+            return raw
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=target_tz)
+        else:
+            parsed = parsed.astimezone(target_tz)
+
+        hour = parsed.strftime("%I").lstrip("0") or "0"
+        return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year} - {hour}:{parsed.strftime('%M')} {parsed.strftime('%p').lower()}"
+
     def _update_dashboard_datetime_label(self):
         if hasattr(self, "dashboard_date_label"):
             self.dashboard_date_label.setText(self._format_dashboard_datetime(self._ph_now()))
@@ -1562,20 +1610,8 @@ class EyeShieldApp(QMainWindow):
         severity_v.setContentsMargins(18, 10, 18, 16)
         severity_v.setSpacing(8)
 
-        self._dash_severity_title_lbl = QLabel("SCREENED PATIENTS")
-        self._dash_severity_title_lbl.setStyleSheet(
-            "color: #6c757d; font-size: 10px; font-weight: 700;"
-            "letter-spacing: 0.9px; text-transform: uppercase; background: transparent;"
-        )
-        severity_v.addWidget(self._dash_severity_title_lbl)
-
-        self._dash_severity_hint_lbl = QLabel("Distribution by diagnosed severity")
-        self._dash_severity_hint_lbl.setStyleSheet(
-            "color: #7b8794; font-size: 12px; font-weight: 500; background: transparent;"
-        )
-        severity_v.addWidget(self._dash_severity_hint_lbl)
-
         scale_row = QWidget()
+        scale_row.setStyleSheet("background: transparent;")
         scale_row_layout = QHBoxLayout(scale_row)
         scale_row_layout.setContentsMargins(0, 0, 0, 0)
         scale_row_layout.setSpacing(8)
@@ -1614,6 +1650,7 @@ class EyeShieldApp(QMainWindow):
             row = QWidget()
             row.setMinimumHeight(40)
             row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            row.setStyleSheet("background: transparent;")
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.setSpacing(6)
@@ -1709,35 +1746,87 @@ class EyeShieldApp(QMainWindow):
         page = QWidget()
         page.setObjectName("referralsPage")
         page.setStyleSheet("QWidget#referralsPage { background: #f8f9fa; }")
+        referral_icon_color = "#2563eb"
 
         layout = QVBoxLayout(page)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
 
-        title = QLabel("REFERRALS")
-        title.setStyleSheet("color: #2b3a4a; font-size: 22px; font-weight: 800; background: transparent;")
-        layout.addWidget(title)
-
-        subtitle = QLabel("Private referral activity for your account only.")
-        subtitle.setStyleSheet("color: #64748b; font-size: 12px; font-weight: 600; background: transparent;")
-        layout.addWidget(subtitle)
-
         actions_row = QHBoxLayout()
         actions_row.setSpacing(8)
+
+        self.referral_search_input = QLineEdit()
+        self.referral_search_input.setPlaceholderText("Search")
+        self.referral_search_input.setMinimumHeight(32)
+        self.referral_search_input.setMinimumWidth(260)
+        self.referral_search_input.setStyleSheet(
+            "QLineEdit {"
+            "background:#ffffff; color:#1f2937; border:1px solid #bfdbfe; border-radius:8px;"
+            "padding:6px 10px; font-size:12px;"
+            "}"
+            "QLineEdit:focus { border-color:#60a5fa; }"
+        )
+        self.referral_search_input.textChanged.connect(self.refresh_referrals_page)
+        actions_row.addWidget(self.referral_search_input)
         actions_row.addStretch(1)
+        icons_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
+
+        self.referral_messages_btn = QPushButton("Add Message")
+        self.referral_messages_btn.setCursor(Qt.PointingHandCursor)
+        self.referral_messages_btn.setMinimumHeight(32)
+        self.referral_messages_btn.setStyleSheet(
+            "QPushButton {"
+            "background: #ffffff; color: #1a1a1a; border: 1px solid #bfdbfe;"
+            "border-radius: 8px; padding: 6px 14px; font-weight: 600;"
+            "}"
+            "QPushButton:hover { background: #eff6ff; border-color: #93c5fd; }"
+        )
+        self._set_button_svg_icon(
+            self.referral_messages_btn,
+            self._resolve_existing_path(os.path.join(icons_dir, "add_comment.svg")),
+            referral_icon_color,
+            QSize(16, 16),
+        )
+        self.referral_messages_btn.clicked.connect(self._send_message_for_selected_referral)
+        actions_row.addWidget(self.referral_messages_btn)
 
         self.referral_inbox_btn = QPushButton("Inbox")
         self.referral_inbox_btn.setCursor(Qt.PointingHandCursor)
         self.referral_inbox_btn.setMinimumHeight(32)
         self.referral_inbox_btn.setStyleSheet(
             "QPushButton {"
-            "background: #ffffff; color: #1f2937; border: 1px solid #d1dae6;"
-            "border-radius: 7px; padding: 6px 14px; font-weight: 700;"
+            "background: #ffffff; color: #1a1a1a; border: 1px solid #bfdbfe;"
+            "border-radius: 8px; padding: 6px 14px; font-weight: 600;"
             "}"
-            "QPushButton:hover { background: #f8fafc; border-color: #9fb2cc; }"
+            "QPushButton:hover { background: #eff6ff; border-color: #93c5fd; }"
+        )
+        self._set_button_svg_icon(
+            self.referral_inbox_btn,
+            self._resolve_existing_path(os.path.join(icons_dir, "inbox.svg")),
+            referral_icon_color,
+            QSize(16, 16),
         )
         self.referral_inbox_btn.clicked.connect(self._open_referral_inbox_dialog)
         actions_row.addWidget(self.referral_inbox_btn)
+
+        self.referral_archives_btn = QPushButton("Archived")
+        self.referral_archives_btn.setCursor(Qt.PointingHandCursor)
+        self.referral_archives_btn.setMinimumHeight(32)
+        self.referral_archives_btn.setStyleSheet(
+            "QPushButton {"
+            "background: #ffffff; color: #1a1a1a; border: 1px solid #bfdbfe;"
+            "border-radius: 8px; padding: 6px 14px; font-weight: 600;"
+            "}"
+            "QPushButton:hover { background: #eff6ff; border-color: #93c5fd; }"
+        )
+        self._set_button_svg_icon(
+            self.referral_archives_btn,
+            self._resolve_existing_path(os.path.join(icons_dir, "archives.svg")),
+            referral_icon_color,
+            QSize(16, 16),
+        )
+        self.referral_archives_btn.clicked.connect(self._open_referral_archives_dialog)
+        actions_row.addWidget(self.referral_archives_btn)
         layout.addLayout(actions_row)
 
         split_row = QHBoxLayout()
@@ -1746,7 +1835,7 @@ class EyeShieldApp(QMainWindow):
         def build_referral_table() -> QTableWidget:
             table = QTableWidget(0, 6)
             table.setHorizontalHeaderLabels(
-                ["Patient", "Status", "Urgency", "Referred By", "Assigned To", "Date of Referral"]
+                ["Patient", "Status", "Priority", "Referring Clinician", "Receiving Clinician", "Assigned At"]
             )
             table.setAlternatingRowColors(True)
             table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -1798,7 +1887,7 @@ class EyeShieldApp(QMainWindow):
         assigned_feed_v.setContentsMargins(14, 12, 14, 12)
         assigned_feed_v.setSpacing(8)
         assigned_feed_title = QLabel("ASSIGNED TO ME")
-        assigned_feed_title.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 800; background: transparent;")
+        assigned_feed_title.setStyleSheet("color: #475569; font-size: 13px; font-weight: 700; background: transparent;")
         assigned_feed_v.addWidget(assigned_feed_title)
         self.referrals_assigned_table = build_referral_table()
         self.referrals_assigned_table.itemDoubleClicked.connect(
@@ -1821,7 +1910,7 @@ class EyeShieldApp(QMainWindow):
         created_feed_v.setContentsMargins(14, 12, 14, 12)
         created_feed_v.setSpacing(8)
         created_feed_title = QLabel("CREATED BY ME")
-        created_feed_title.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 800; background: transparent;")
+        created_feed_title.setStyleSheet("color: #475569; font-size: 13px; font-weight: 700; background: transparent;")
         created_feed_v.addWidget(created_feed_title)
         self.referrals_created_table = build_referral_table()
         self.referrals_created_table.itemDoubleClicked.connect(
@@ -1844,14 +1933,46 @@ class EyeShieldApp(QMainWindow):
         unread_notifications = UserManager.get_unread_referral_notifications(self.username, limit=300)
         unread_count = len(unread_notifications)
         if hasattr(self, "referral_inbox_btn"):
-            if unread_count > 0:
-                self.referral_inbox_btn.setText(f"Inbox ({unread_count})")
-            else:
-                self.referral_inbox_btn.setText("Inbox")
+            self.referral_inbox_btn.setText(f"Inbox ({unread_count})" if unread_count else "Inbox")
 
         referrals = UserManager.get_user_referrals(self.username, limit=200)
-        assigned_referrals = [item for item in referrals if item.get("relation") == "assigned_to_me"]
-        created_referrals = [item for item in referrals if item.get("relation") == "created_by_me"]
+        assigned_referrals = [
+            item
+            for item in referrals
+            if item.get("relation") == "assigned_to_me"
+            and str(item.get("status") or "").strip().lower() != "archived"
+        ]
+        created_referrals = [
+            item
+            for item in referrals
+            if item.get("relation") == "created_by_me" and str(item.get("status") or "").strip().lower() != "archived"
+        ]
+
+        query = str(self.referral_search_input.text() if hasattr(self, "referral_search_input") else "").strip().lower()
+        if query:
+            def _matches_query(referral: dict) -> bool:
+                haystack = " ".join([
+                    str(referral.get("referral_id") or ""),
+                    str(referral.get("patient_name") or ""),
+                    str(referral.get("status") or ""),
+                    str(referral.get("urgency") or ""),
+                    str(referral.get("assigned_by") or ""),
+                    str(referral.get("assigned_to") or ""),
+                    str(referral.get("notes") or ""),
+                ]).lower()
+                return query in haystack
+
+            assigned_referrals = [item for item in assigned_referrals if _matches_query(item)]
+            created_referrals = [item for item in created_referrals if _matches_query(item)]
+
+        self._archived_created_referrals = [
+            item
+            for item in referrals
+            if item.get("relation") == "created_by_me" and str(item.get("status") or "").strip().lower() == "archived"
+        ]
+        if hasattr(self, "referral_archives_btn"):
+            archived_count = len(self._archived_created_referrals)
+            self.referral_archives_btn.setText(f"Archived ({archived_count})" if archived_count else "Archived")
 
         def populate_table(table: QTableWidget, rows: list[dict], empty_message: str):
             table.clearContents()
@@ -1873,11 +1994,19 @@ class EyeShieldApp(QMainWindow):
                 patient_name = str(referral.get("patient_name") or "Unknown Patient").strip() or "Unknown Patient"
                 urgency = str(referral.get("urgency") or "normal").capitalize()
                 status_raw = str(referral.get("status") or "pending").strip()
-                status = status_raw.replace("_", " ").title()
+                status_display = {
+                    "pending": "Pending",
+                    "viewed": "Viewed",
+                    "in_review": "In Review",
+                    "completed": "Completed",
+                    "archived": "Archived",
+                }
+                status = status_display.get(status_raw.lower(), status_raw.replace("_", " ").title())
                 assigned_at = str(referral.get("assigned_at") or "").strip()
+                assigned_at_display = EyeShieldApp._format_referral_datetime(assigned_at)
                 assigned_by = str(referral.get("assigned_by") or "").strip()
                 assigned_to = str(referral.get("assigned_to") or "").strip()
-                row_values = [patient_name, status, urgency, assigned_by or "-", assigned_to or "-", assigned_at or "-"]
+                row_values = [patient_name, status, urgency, assigned_by or "-", assigned_to or "-", assigned_at_display]
                 for col_index, value in enumerate(row_values):
                     item = QTableWidgetItem(value)
                     item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
@@ -1909,30 +2038,44 @@ class EyeShieldApp(QMainWindow):
         if referral_id and relation == "assigned_to_me" and status == "pending":
             UserManager.update_referral_status(referral_id, "viewed", self.username)
 
-        self._show_referral_details(patient_name)
+        self._show_referral_details(patient_name, referral)
         self.refresh_referrals_page()
 
     def _show_referral_context_menu(self, row_widget: QWidget, referral: dict, local_pos):
         patient_name = str(referral.get("patient_name") or "Unknown Patient").strip() or "Unknown Patient"
         referral_id = str(referral.get("referral_id") or "").strip()
         relation = str(referral.get("relation") or "")
+        status = str(referral.get("status") or "").strip().lower()
 
         menu = QMenu(self)
         view_action = menu.addAction("View Details")
         viewed_action = None
         review_action = None
         complete_action = None
-        note_action = None
+        message_action = None
         reassign_action = None
+        edit_action = None
+        archive_action = None
+        delete_archived_action = None
+
+        allowed_message_statuses = {"pending", "viewed", "in_review"}
 
         if relation == "assigned_to_me" and referral_id:
             menu.addSeparator()
             viewed_action = menu.addAction("Mark as Viewed")
-            review_action = menu.addAction("Start Review")
+            review_action = menu.addAction("Start Clinical Review")
             complete_action = menu.addAction("Complete Referral")
-            note_action = menu.addAction("Add Clinical Note")
+            if status in allowed_message_statuses:
+                message_action = menu.addAction("Send Message")
             menu.addSeparator()
             reassign_action = menu.addAction("Reassign Referral")
+        elif relation == "created_by_me" and referral_id:
+            menu.addSeparator()
+            edit_action = menu.addAction("Edit Referral")
+            if status == "completed":
+                archive_action = menu.addAction("Archive Referral")
+            if status == "archived":
+                delete_archived_action = menu.addAction("Delete Archived Referral")
 
         chosen = menu.exec(row_widget.mapToGlobal(local_pos))
         if chosen == view_action:
@@ -1947,22 +2090,38 @@ class EyeShieldApp(QMainWindow):
         if chosen == complete_action:
             self._apply_referral_status(referral, "completed", require_note=True)
             return
-        if chosen == note_action:
+        if chosen == message_action:
+            if status not in allowed_message_statuses:
+                QMessageBox.information(
+                    self,
+                    "Referral",
+                    "Messages are only available for Pending, Viewed, or In Review referrals.",
+                )
+                return
             note, ok = QInputDialog.getMultiLineText(
                 self,
-                "Clinical Note",
-                f"Add note for {patient_name}:",
+                "Send Message",
+                f"Message for {patient_name}:",
                 "",
             )
             if ok and str(note).strip():
                 if UserManager.append_referral_note(referral_id, self.username, note.strip()):
-                    QMessageBox.information(self, "Referral", "Clinical note saved.")
+                    QMessageBox.information(self, "Referral", "Message sent.")
                     self.refresh_referrals_page()
                 else:
-                    QMessageBox.warning(self, "Referral", "Unable to save clinical note.")
+                    QMessageBox.warning(self, "Referral", "Unable to send message.")
             return
         if chosen == reassign_action:
             self._reassign_referral(referral)
+            return
+        if chosen == edit_action:
+            self._edit_referral(referral)
+            return
+        if chosen == archive_action:
+            self._archive_referral(referral)
+            return
+        if chosen == delete_archived_action:
+            self._delete_archived_referral(referral)
 
     def _referral_for_selected_table_row(self, table: QTableWidget, row_index: int) -> dict | None:
         if not table:
@@ -2067,7 +2226,7 @@ class EyeShieldApp(QMainWindow):
         selected, ok = QInputDialog.getItem(
             self,
             "Reassign Referral",
-            f"Select clinician for {patient_name}:",
+            f"Select receiving clinician for {patient_name}:",
             options,
             0,
             False,
@@ -2112,10 +2271,393 @@ class EyeShieldApp(QMainWindow):
         else:
             QMessageBox.warning(self, "Referral", "Unable to reassign referral.")
 
+    def _create_referral_from_dashboard(self):
+        patient_name, ok = QInputDialog.getText(self, "New Referral", "Patient name:")
+        patient_name = str(patient_name or "").strip()
+        if not ok:
+            return
+        if not patient_name:
+            QMessageBox.warning(self, "Referral", "Patient name is required.")
+            return
+
+        clinicians = UserManager.list_clinicians(exclude_username=self.username)
+        if not clinicians:
+            QMessageBox.information(self, "Referral", "No clinicians available for assignment.")
+            return
+
+        options = [f"{item.get('display_name')} (@{item.get('username')})" for item in clinicians]
+        selected, ok = QInputDialog.getItem(
+            self,
+            "New Referral",
+            f"Assign {patient_name} to:",
+            options,
+            0,
+            False,
+        )
+        if not ok or not selected:
+            return
+
+        index = options.index(selected)
+        target = str(clinicians[index].get("username") or "").strip()
+        display_name = str(clinicians[index].get("display_name") or target).strip()
+        if not target:
+            QMessageBox.warning(self, "Referral", "Unable to resolve selected clinician.")
+            return
+
+        urgency_label, ok = QInputDialog.getItem(
+            self,
+            "New Referral",
+            "Urgency:",
+            ["Normal", "Urgent", "Critical"],
+            0,
+            False,
+        )
+        if not ok or not urgency_label:
+            return
+        urgency = str(urgency_label).strip().lower()
+
+        notes, ok = QInputDialog.getMultiLineText(self, "New Referral", "Clinical note (optional):", "")
+        if not ok:
+            return
+
+        duplicate = UserManager.find_active_duplicate_referral(patient_name, target)
+        if duplicate:
+            status_label = str(duplicate.get("status") or "pending").replace("_", " ").title()
+            existing_referral_id = str(duplicate.get("referral_id") or "").strip()
+            confirm = QMessageBox.question(
+                self,
+                "Duplicate Referral",
+                (
+                    f"{patient_name} is already referred to {display_name} "
+                    f"(Referral ID: {existing_referral_id}, Status: {status_label}).\n\n"
+                    "Do you want to create another referral anyway?"
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                return
+
+        referral_id = f"REF-{datetime.now().strftime('%Y%m%d%H%M%S%f')}-MANUAL"
+        if UserManager.assign_referral(
+            referral_id=referral_id,
+            assigned_to_username=target,
+            assigned_by_username=self.username,
+            patient_name=patient_name,
+            urgency=urgency,
+            notes=str(notes or "").strip() or "Assigned from Referrals page",
+        ):
+            QMessageBox.information(self, "Referral", "Referral created successfully.")
+            self.refresh_referrals_page()
+        else:
+            QMessageBox.warning(self, "Referral", "Unable to create referral.")
+
+    def _edit_referral(self, referral: dict):
+        referral_id = str(referral.get("referral_id") or "").strip()
+        if not referral_id:
+            QMessageBox.warning(self, "Referral", "Referral ID is missing.")
+            return
+
+        status = str(referral.get("status") or "").strip().lower()
+        if status in {"completed", "archived"}:
+            notice = QMessageBox(self)
+            notice.setIcon(QMessageBox.Information)
+            notice.setWindowTitle("Referral")
+            notice.setText("Referral is already complete.")
+            notice.setStandardButtons(QMessageBox.Close)
+            close_button = notice.button(QMessageBox.Close)
+            if close_button is not None:
+                close_button.setText("Close")
+            notice.exec()
+            return
+
+        current_urgency = str(referral.get("urgency") or "normal").strip().lower() or "normal"
+        urgency_choices = ["normal", "urgent", "critical"]
+        try:
+            default_index = urgency_choices.index(current_urgency)
+        except ValueError:
+            default_index = 0
+        urgency_label, ok = QInputDialog.getItem(
+            self,
+            "Edit Referral",
+            "Priority:",
+            ["Normal", "Urgent", "Critical"],
+            default_index,
+            False,
+        )
+        if not ok or not urgency_label:
+            return
+
+        existing_notes = str(referral.get("notes") or "").strip()
+        notes, ok = QInputDialog.getMultiLineText(
+            self,
+            "Edit Referral",
+            "Clinical notes:",
+            existing_notes,
+        )
+        if not ok:
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Referral Update",
+            "Apply these referral changes now?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        if UserManager.update_referral_details(
+            referral_id=referral_id,
+            actor_username=self.username,
+            urgency=str(urgency_label).strip().lower(),
+            notes=str(notes or "").strip(),
+        ):
+            QMessageBox.information(self, "Referral", "Referral updated successfully.")
+            self.refresh_referrals_page()
+        else:
+            QMessageBox.warning(
+                self,
+                "Referral",
+                "Unable to update referral. Only active referrals created by you can be edited.",
+            )
+
+    def _archive_selected_referral_from_dashboard(self):
+        referral = None
+        if hasattr(self, "referrals_created_table"):
+            created_row = self.referrals_created_table.currentRow()
+            if created_row >= 0:
+                referral = self._referral_for_selected_table_row(self.referrals_created_table, created_row)
+
+        if referral is None and hasattr(self, "referrals_assigned_table"):
+            assigned_row = self.referrals_assigned_table.currentRow()
+            if assigned_row >= 0:
+                referral = self._referral_for_selected_table_row(self.referrals_assigned_table, assigned_row)
+
+        if not referral:
+            QMessageBox.information(self, "Referral", "Select a referral first.")
+            return
+
+        relation = str(referral.get("relation") or "")
+        if relation != "created_by_me":
+            QMessageBox.warning(self, "Referral", "Only referrals created by you can be archived.")
+            return
+
+        status = str(referral.get("status") or "").strip().lower()
+        if status == "archived":
+            self._delete_archived_referral(referral)
+            return
+
+        self._archive_referral(referral)
+
+    def _selected_referral_from_tables(self) -> dict | None:
+        referral = None
+        if hasattr(self, "referrals_created_table"):
+            created_row = self.referrals_created_table.currentRow()
+            if created_row >= 0:
+                referral = self._referral_for_selected_table_row(self.referrals_created_table, created_row)
+        if referral is None and hasattr(self, "referrals_assigned_table"):
+            assigned_row = self.referrals_assigned_table.currentRow()
+            if assigned_row >= 0:
+                referral = self._referral_for_selected_table_row(self.referrals_assigned_table, assigned_row)
+        return referral
+
+    def _send_message_for_selected_referral(self):
+        referral = self._selected_referral_from_tables()
+        if not referral:
+            QMessageBox.information(self, "Referral", "Select a referral first.")
+            return
+
+        status = str(referral.get("status") or "").strip().lower()
+        if status not in {"pending", "viewed", "in_review"}:
+            QMessageBox.information(
+                self,
+                "Referral",
+                "Messages are only available for Pending, Viewed, or In Review referrals.",
+            )
+            return
+
+        referral_id = str(referral.get("referral_id") or "").strip()
+        patient_name = str(referral.get("patient_name") or "Unknown Patient").strip() or "Unknown Patient"
+        if not referral_id:
+            QMessageBox.warning(self, "Referral", "Referral ID is missing.")
+            return
+
+        message_text, ok = QInputDialog.getMultiLineText(
+            self,
+            "Send Message",
+            f"Message for {patient_name}:",
+            "",
+        )
+        if not ok:
+            return
+        message_text = str(message_text or "").strip()
+        if not message_text:
+            QMessageBox.warning(self, "Referral", "Message cannot be empty.")
+            return
+
+        if UserManager.append_referral_note(referral_id, self.username, message_text):
+            QMessageBox.information(self, "Referral", "Message sent.")
+            self.refresh_referrals_page()
+        else:
+            QMessageBox.warning(self, "Referral", "Unable to send message.")
+
+    def _archive_referral(self, referral: dict):
+        referral_id = str(referral.get("referral_id") or "").strip()
+        patient_name = str(referral.get("patient_name") or "Unknown Patient").strip() or "Unknown Patient"
+        status = str(referral.get("status") or "").strip().lower()
+        if not referral_id:
+            QMessageBox.warning(self, "Referral", "Referral ID is missing.")
+            return
+        if status != "completed":
+            QMessageBox.warning(self, "Referral", "Only completed referrals can be archived.")
+            return
+
+        reason, ok = QInputDialog.getText(
+            self,
+            "Archive Referral",
+            "Reason for archive (optional):",
+        )
+        if not ok:
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Archive Referral",
+            f"Archive referral for {patient_name}?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        if UserManager.delete_referral(referral_id, self.username, str(reason or "").strip()):
+            QMessageBox.information(self, "Referral", "Referral archived successfully.")
+            self.refresh_referrals_page()
+        else:
+            QMessageBox.warning(
+                self,
+                "Referral",
+                "Unable to archive referral. Only completed referrals created by you can be archived.",
+            )
+
+    def _delete_archived_referral(self, referral: dict):
+        referral_id = str(referral.get("referral_id") or "").strip()
+        patient_name = str(referral.get("patient_name") or "Unknown Patient").strip() or "Unknown Patient"
+        status = str(referral.get("status") or "").strip().lower()
+        if not referral_id:
+            QMessageBox.warning(self, "Referral", "Referral ID is missing.")
+            return
+        if status != "archived":
+            QMessageBox.warning(self, "Referral", "Only archived referrals can be deleted.")
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Delete Archived Referral",
+            f"Permanently delete archived referral for {patient_name}? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        if UserManager.delete_archived_referral(referral_id, self.username):
+            QMessageBox.information(self, "Referral", "Archived referral deleted permanently.")
+            self.refresh_referrals_page()
+        else:
+            QMessageBox.warning(self, "Referral", "Unable to delete archived referral.")
+
+    def _open_referral_archives_dialog(self):
+        archived_rows = list(getattr(self, "_archived_created_referrals", []))
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Archived Referrals")
+        dialog.resize(880, 500)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        title = QLabel("Archived Referrals (Created By Me)")
+        title.setStyleSheet("font-size: 15px; font-weight: 700; color: #1f2937;")
+        layout.addWidget(title)
+
+        table = QTableWidget(0, 6)
+        table.setHorizontalHeaderLabels(["Patient", "Status", "Priority", "Referring Clinician", "Receiving Clinician", "Assigned At"])
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SingleSelection)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+
+        if archived_rows:
+            table.setRowCount(len(archived_rows))
+            for row_index, referral in enumerate(archived_rows):
+                patient_name = str(referral.get("patient_name") or "Unknown Patient").strip() or "Unknown Patient"
+                urgency = str(referral.get("urgency") or "normal").capitalize()
+                status_raw = str(referral.get("status") or "archived").strip()
+                status = status_raw.replace("_", " ").title()
+                assigned_at = str(referral.get("assigned_at") or "").strip()
+                assigned_at_display = EyeShieldApp._format_referral_datetime(assigned_at)
+                assigned_by = str(referral.get("assigned_by") or "").strip()
+                assigned_to = str(referral.get("assigned_to") or "").strip()
+                row_values = [patient_name, status, urgency, assigned_by or "-", assigned_to or "-", assigned_at_display]
+                for col_index, value in enumerate(row_values):
+                    item = QTableWidgetItem(value)
+                    item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+                    if col_index == 0:
+                        item.setData(Qt.UserRole, referral)
+                    table.setItem(row_index, col_index, item)
+        else:
+            table.setRowCount(1)
+            empty = QTableWidgetItem("No archived referrals.")
+            empty.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            table.setItem(0, 0, empty)
+            for col in range(1, table.columnCount()):
+                cell = QTableWidgetItem("")
+                cell.setFlags(Qt.ItemIsEnabled)
+                table.setItem(0, col, cell)
+
+        layout.addWidget(table, 1)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        delete_btn = QPushButton("Delete Archived")
+        close_btn = QPushButton("Close")
+        delete_btn.setEnabled(bool(archived_rows))
+        actions.addWidget(delete_btn)
+        actions.addWidget(close_btn)
+        layout.addLayout(actions)
+
+        def _delete_selected_archived():
+            row = table.currentRow()
+            if row < 0:
+                return
+            patient_item = table.item(row, 0)
+            if not patient_item:
+                return
+            referral = patient_item.data(Qt.UserRole)
+            if not isinstance(referral, dict):
+                return
+            self._delete_archived_referral(referral)
+            self.refresh_referrals_page()
+            dialog.accept()
+
+        delete_btn.clicked.connect(_delete_selected_archived)
+        close_btn.clicked.connect(dialog.accept)
+        dialog.exec()
+
     def _open_referral_inbox_dialog(self):
         notifications = UserManager.get_referral_notifications(self.username, include_read=True, limit=300)
         dialog = QDialog(self)
-        dialog.setWindowTitle("Referral Notification Inbox")
+        dialog.setWindowTitle("Referral Inbox")
         dialog.resize(820, 480)
         v = QVBoxLayout(dialog)
         v.setContentsMargins(14, 14, 14, 14)
@@ -2137,6 +2679,8 @@ class EyeShieldApp(QMainWindow):
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setSelectionMode(QAbstractItemView.SingleSelection)
+        table.setWordWrap(True)
+        table.setTextElideMode(Qt.ElideNone)
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setStretchLastSection(True)
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -2144,26 +2688,53 @@ class EyeShieldApp(QMainWindow):
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         table.setRowCount(len(notifications))
         for idx, item in enumerate(notifications):
             status = "Read" if item.get("is_read") else "Unread"
+            raw_title = str(item.get("title") or "").strip()
+            raw_message = str(item.get("message") or "").strip()
+            title_lower = raw_title.lower()
+            message_lower = raw_message.lower()
+            if "note" in title_lower and (
+                message_lower.startswith("message on this patient")
+                or "added a clinical note" in message_lower
+            ):
+                sender_match = re.search(r"^(.*?)\s+added a clinical note", raw_message, flags=re.IGNORECASE)
+                sender_name = sender_match.group(1).strip() if sender_match else "Referring Doctor"
+
+                note_text = raw_message
+                new_format_match = re.search(r"\bat\s\d{2}:\d{2}:\s*(.+)$", raw_message, flags=re.IGNORECASE)
+                old_format_match = re.search(r"\bby\s.+?:\s*(.+)$", raw_message, flags=re.IGNORECASE)
+                if new_format_match:
+                    note_text = new_format_match.group(1).strip()
+                elif old_format_match:
+                    note_text = old_format_match.group(1).strip()
+
+                display_title = f"Message from {sender_name}"
+                display_message = note_text
+            else:
+                display_title = raw_title
+                display_message = raw_message
             row_values = [
                 status,
-                str(item.get("title") or ""),
-                str(item.get("message") or ""),
+                display_title,
+                display_message,
                 str(item.get("referral_id") or "-"),
                 str(item.get("created_at") or ""),
             ]
             for col, value in enumerate(row_values):
                 qitem = QTableWidgetItem(value)
                 qitem.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+                qitem.setToolTip(str(value))
                 if col == 0 and status == "Unread":
                     qitem.setForeground(QColor("#b45309"))
                 table.setItem(idx, col, qitem)
+        table.resizeRowsToContents()
         v.addWidget(table, 1)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
-        mark_selected_btn = QPushButton("Mark Selected Read")
+        mark_selected_btn = QPushButton("Mark Selected as Read")
         close_btn = QPushButton("Close")
         mark_selected_btn.setEnabled(bool(notifications))
         buttons.addWidget(mark_selected_btn)
@@ -2189,7 +2760,7 @@ class EyeShieldApp(QMainWindow):
             QMessageBox.information(self, "Referral Inbox", f"Marked {updated} notification(s) as read.")
         self.refresh_referrals_page()
 
-    def _show_referral_details(self, patient_name: str):
+    def _show_referral_details(self, patient_name: str, referral: dict | None = None):
         """Fetch patient record by name and display referral details with fundus image."""
         try:
             conn = sqlite3.connect(DB_FILE)
@@ -2260,6 +2831,11 @@ class EyeShieldApp(QMainWindow):
                 "symptom_vision_loss": row[36],
                 "source_image_path": row[37],
             }
+
+            if isinstance(referral, dict):
+                referral_notes = str(referral.get("notes") or "").strip()
+                if referral_notes:
+                    record["notes"] = referral_notes
 
             UserManager.add_activity_log(
                 self.username,
@@ -2477,7 +3053,7 @@ class EyeShieldApp(QMainWindow):
                 bar.setValue(count)
                 bar.setStyleSheet(
                     f"QProgressBar {{"
-                    f" background: {'#e8eef5' if not dark else '#22344a'};"
+                    f" background: transparent;"
                     f" border: 0; border-radius: 6px;"
                     f" }}"
                     f"QProgressBar::chunk {{"

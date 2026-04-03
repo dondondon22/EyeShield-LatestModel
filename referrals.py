@@ -10,6 +10,7 @@ class ReferralService:
     """Encapsulates referral workflow rules and persistence helpers."""
 
     VALID_URGENCY = {"normal", "urgent", "critical"}
+    ACTIVE_DUPLICATE_STATUSES = ("pending", "viewed", "in_review", "rereferred")
     STATUS_TRANSITIONS = {
         "pending": {"viewed", "in_review", "reassigned", "rereferred", "archived"},
         "viewed": {"in_review", "completed", "reassigned", "rereferred", "archived"},
@@ -45,6 +46,10 @@ class ReferralService:
         if not value:
             return "Dr. Unknown"
         lowered = value.lower()
+        if lowered in {"clinician", "admin", "viewer", "system", "__legacy_unknown__", "unknown"}:
+            return "Unknown"
+        if " " not in value and any(char.isdigit() for char in value):
+            return value
         if lowered.startswith("dr. ") or lowered.startswith("dr "):
             return value
         return f"Dr. {value}"
@@ -400,6 +405,49 @@ class ReferralService:
         return success
 
     @staticmethod
+    def find_active_duplicate_referral(
+        get_connection: Callable[[], sqlite3.Connection],
+        patient_name: str,
+        assigned_to_username: str,
+    ) -> dict | None:
+        patient_key = str(patient_name or "").strip().lower()
+        assigned_to = str(assigned_to_username or "").strip()
+        if not patient_key or not assigned_to:
+            return None
+
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            ReferralService.ensure_schema(conn)
+            placeholders = ", ".join(["?"] * len(ReferralService.ACTIVE_DUPLICATE_STATUSES))
+            params = [patient_key, assigned_to, *ReferralService.ACTIVE_DUPLICATE_STATUSES]
+            cur.execute(
+                f"""
+                SELECT referral_id, episode_no, status, assigned_at
+                FROM referral_assignments
+                WHERE LOWER(TRIM(patient_name)) = ?
+                    AND assigned_to_username = ?
+                    AND status IN ({placeholders})
+                ORDER BY assigned_at DESC, id DESC
+                LIMIT 1
+                """,
+                params,
+            )
+            row = cur.fetchone()
+        except sqlite3.Error:
+            row = None
+        conn.close()
+
+        if not row:
+            return None
+        return {
+            "referral_id": str(row[0] or "").strip(),
+            "episode_no": int(row[1] or 1),
+            "status": str(row[2] or "").strip().lower(),
+            "assigned_at": str(row[3] or "").strip(),
+        }
+
+    @staticmethod
     def get_pending_referrals(get_connection: Callable[[], sqlite3.Connection], username: str) -> list[dict]:
         user = str(username or "").strip()
         if not user:
@@ -661,7 +709,7 @@ class ReferralService:
             ReferralService.ensure_schema(conn)
             cur.execute(
                 """
-                SELECT notes, assigned_to_username, episode_no
+                SELECT notes, assigned_to_username, assigned_by_username, patient_name, episode_no, status
                 FROM referral_assignments
                 WHERE referral_id = ?
                 ORDER BY episode_no DESC, id DESC
@@ -675,7 +723,19 @@ class ReferralService:
                 return False
             existing = str(row[0] or "").strip()
             assigned_to = str(row[1] or "").strip()
-            episode_no = int(row[2] or 1)
+            assigned_by = str(row[2] or "").strip()
+            patient_name = str(row[3] or "").strip()
+            episode_no = int(row[4] or 1)
+            status = str(row[5] or "").strip().lower()
+
+            # Clinical note exchange is constrained to clinicians directly involved in the referral handoff.
+            if actor not in {assigned_to, assigned_by}:
+                conn.close()
+                return False
+            if status not in {"pending", "viewed", "in_review"}:
+                conn.close()
+                return False
+
             timestamp = ReferralService._now()
             try:
                 dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
@@ -696,14 +756,22 @@ class ReferralService:
                 actor_username=actor,
                 details=note_text,
             )
-            if assigned_to and assigned_to != actor:
-                ReferralService._notify(
-                    conn,
-                    assigned_to,
-                    referral_key,
-                    title="Referral note added",
-                    message=f"Message on this patient on {pretty_date} at {pretty_hour}: {note_text}",
-                )
+            patient_label = patient_name or f"referral {referral_key}"
+            notification_title = "Clinical note added"
+            notification_message = (
+                f"{actor} added a clinical note for {patient_label} "
+                f"(Referral ID: {referral_key}) on {pretty_date} at {pretty_hour}: {note_text}"
+            )
+            recipients = {assigned_to, assigned_by}
+            for recipient in recipients:
+                if recipient and recipient != actor:
+                    ReferralService._notify(
+                        conn,
+                        recipient,
+                        referral_key,
+                        title=notification_title,
+                        message=notification_message,
+                    )
             conn.commit()
             success = cur.rowcount > 0
         except sqlite3.Error:
@@ -845,6 +913,254 @@ class ReferralService:
 
         if success:
             add_activity_log(actor, f"Reassigned referral {referral_key} to {new_assignee}")
+        return success
+
+    @staticmethod
+    def update_referral_details(
+        get_connection: Callable[[], sqlite3.Connection],
+        add_activity_log: Callable[[str, str], bool],
+        referral_id: str,
+        actor_username: str,
+        urgency: str = "",
+        notes: str = "",
+    ) -> bool:
+        referral_key = str(referral_id or "").strip()
+        actor = str(actor_username or "").strip()
+        urgency_value = str(urgency or "").strip().lower()
+        notes_value = str(notes or "").strip()
+        if not referral_key or not actor:
+            return False
+        if not urgency_value and not notes_value:
+            return False
+        if urgency_value and urgency_value not in ReferralService.VALID_URGENCY:
+            return False
+        if len(notes_value) > 5000:
+            return False
+
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            ReferralService.ensure_schema(conn)
+            cur.execute(
+                """
+                SELECT assigned_by_username, urgency, notes, status, episode_no
+                FROM referral_assignments
+                WHERE referral_id = ?
+                ORDER BY episode_no DESC, id DESC
+                LIMIT 1
+                """,
+                (referral_key,),
+            )
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return False
+
+            assigned_by = str(row[0] or "").strip()
+            current_urgency = str(row[1] or "normal").strip().lower() or "normal"
+            current_notes = str(row[2] or "").strip()
+            current_status = str(row[3] or "").strip().lower()
+            current_episode = int(row[4] or 1)
+
+            if assigned_by != actor:
+                conn.close()
+                return False
+            if current_status in {"completed", "archived"}:
+                conn.close()
+                return False
+
+            new_urgency = urgency_value or current_urgency
+            new_notes = notes_value if notes_value else current_notes
+            now = ReferralService._now()
+            cur.execute(
+                """
+                UPDATE referral_assignments
+                SET urgency = ?, notes = ?, updated_at = ?, due_at = ?
+                WHERE referral_id = ? AND episode_no = ?
+                """,
+                (
+                    new_urgency,
+                    new_notes,
+                    now,
+                    ReferralService._default_due_at(new_urgency, now),
+                    referral_key,
+                    current_episode,
+                ),
+            )
+            ReferralService._record_event(
+                conn,
+                referral_key,
+                event_type="details_updated",
+                actor_username=actor,
+                from_status=current_status,
+                to_status=current_status,
+                details=json.dumps(
+                    {
+                        "urgency_from": current_urgency,
+                        "urgency_to": new_urgency,
+                        "notes_updated": bool(notes_value),
+                    }
+                ),
+            )
+            conn.commit()
+            success = cur.rowcount > 0
+        except sqlite3.Error:
+            success = False
+        conn.close()
+
+        if success:
+            add_activity_log(actor, f"Updated referral details {referral_key}")
+        return success
+
+    @staticmethod
+    def delete_referral(
+        get_connection: Callable[[], sqlite3.Connection],
+        add_activity_log: Callable[[str, str], bool],
+        referral_id: str,
+        actor_username: str,
+        reason: str = "",
+    ) -> bool:
+        referral_key = str(referral_id or "").strip()
+        actor = str(actor_username or "").strip()
+        reason_text = str(reason or "").strip() or "Archived by referral creator"
+        if not referral_key or not actor:
+            return False
+
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            ReferralService.ensure_schema(conn)
+            cur.execute(
+                """
+                SELECT assigned_by_username, assigned_to_username, status, notes, episode_no
+                FROM referral_assignments
+                WHERE referral_id = ?
+                ORDER BY episode_no DESC, id DESC
+                LIMIT 1
+                """,
+                (referral_key,),
+            )
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return False
+
+            assigned_by = str(row[0] or "").strip()
+            assigned_to = str(row[1] or "").strip()
+            current_status = str(row[2] or "").strip().lower()
+            existing_notes = str(row[3] or "").strip()
+            current_episode = int(row[4] or 1)
+
+            if assigned_by != actor:
+                conn.close()
+                return False
+            if current_status == "archived":
+                conn.close()
+                return False
+            if current_status != "completed":
+                conn.close()
+                return False
+
+            now = ReferralService._now()
+            note_line = f"[{now}] {actor}: Referral archived. Reason: {reason_text}"
+            merged_notes = f"{existing_notes}\n{note_line}".strip() if existing_notes else note_line
+
+            cur.execute(
+                """
+                UPDATE referral_assignments
+                SET status = 'archived', notes = ?, updated_at = ?, last_status_at = ?, closed_at = ?, closed_by_username = ?
+                WHERE referral_id = ? AND episode_no = ?
+                """,
+                (merged_notes, now, now, now, actor, referral_key, current_episode),
+            )
+            ReferralService._record_event(
+                conn,
+                referral_key,
+                event_type="archived",
+                actor_username=actor,
+                from_status=current_status,
+                to_status="archived",
+                details=reason_text,
+            )
+            if assigned_to and assigned_to != actor:
+                ReferralService._notify(
+                    conn,
+                    assigned_to,
+                    referral_key,
+                    title="Referral archived",
+                    message=f"Referral {referral_key} was archived by {actor}.",
+                )
+            conn.commit()
+            success = cur.rowcount > 0
+        except sqlite3.Error:
+            success = False
+        conn.close()
+
+        if success:
+            add_activity_log(actor, f"Archived referral {referral_key}")
+        return success
+
+    @staticmethod
+    def purge_archived_referral(
+        get_connection: Callable[[], sqlite3.Connection],
+        add_activity_log: Callable[[str, str], bool],
+        referral_id: str,
+        actor_username: str,
+        note: str = "",
+    ) -> bool:
+        referral_key = str(referral_id or "").strip()
+        actor = str(actor_username or "").strip()
+        note_text = str(note or "").strip()
+        if not referral_key or not actor:
+            return False
+        if len(note_text) > 5000:
+            return False
+
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            ReferralService.ensure_schema(conn)
+            cur.execute(
+                """
+                SELECT assigned_by_username, status
+                FROM referral_assignments
+                WHERE referral_id = ?
+                ORDER BY episode_no DESC, id DESC
+                LIMIT 1
+                """,
+                (referral_key,),
+            )
+            row = cur.fetchone()
+            if not row:
+                conn.close()
+                return False
+
+            assigned_by = str(row[0] or "").strip()
+            current_status = str(row[1] or "").strip().lower()
+            if assigned_by != actor or current_status != "archived":
+                conn.close()
+                return False
+
+            ReferralService._record_event(
+                conn,
+                referral_key,
+                event_type="purged",
+                actor_username=actor,
+                from_status="archived",
+                to_status="deleted",
+                details=note_text or "Deleted archived referral",
+            )
+            cur.execute("DELETE FROM notification_inbox WHERE referral_id = ?", (referral_key,))
+            cur.execute("DELETE FROM referral_events WHERE referral_id = ?", (referral_key,))
+            cur.execute("DELETE FROM referral_assignments WHERE referral_id = ?", (referral_key,))
+            conn.commit()
+            success = cur.rowcount > 0
+        except sqlite3.Error:
+            success = False
+        conn.close()
+
+        if success:
+            add_activity_log(actor, f"Deleted archived referral {referral_key}")
         return success
 
     @staticmethod
