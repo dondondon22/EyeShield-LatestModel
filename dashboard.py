@@ -6,7 +6,6 @@ Contains main application window and dashboard functionality.
 import contextlib
 import json
 import os
-import random
 import re
 import sqlite3
 from datetime import datetime, timezone, timedelta
@@ -23,11 +22,11 @@ except Exception:  # pragma: no cover - platform specific
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-    QStackedWidget, QGroupBox, QMessageBox, QProgressBar, QSizePolicy,
-    QFrame, QMenu, QInputDialog, QTableWidget, QTableWidgetItem, QAbstractItemView,
+    QStackedWidget, QMessageBox, QProgressBar, QSizePolicy,
+    QMenu, QInputDialog, QTableWidget, QTableWidgetItem, QAbstractItemView,
     QHeaderView, QDialog, QApplication, QLineEdit
 )
-from PySide6.QtCore import Qt, QSize, QByteArray, QEvent, QTimer, QCoreApplication
+from PySide6.QtCore import Qt, QSize, QByteArray, QEvent, QTimer
 from PySide6.QtGui import QIcon, QPixmap, QImage, QPainter, QFont, QShortcut, QKeySequence, QColor, QGuiApplication
 from PySide6.QtSvg import QSvgRenderer
 
@@ -2989,7 +2988,7 @@ class EyeShieldApp(QMainWindow):
         if availability_card:
             availability_card.setStyleSheet(
                 f"QWidget#availabilityCard {{ background: {card_bg};"
-                "  border: none; border-radius: 12px; }}"
+                "  border: none; border-radius: 12px; }"
             )
         if hasattr(self, "_dash_availability_title_lbl"):
             self._dash_availability_title_lbl.setStyleSheet(

@@ -3336,5 +3336,4 @@ class ActivityLogPage(QWidget):
 
         pack = get_pack(language)
         self._title_lbl.setText(pack["usr_log"])
-        self._log_group.setTitle(pack["usr_log"])
 
