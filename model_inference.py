@@ -280,15 +280,16 @@ def preload_model_async() -> None:
     t.start()
 
 
-def _load_image_tensor(image_path: str) -> tuple[Image.Image, torch.Tensor]:
+def _load_image_tensor(image_path: str, skip_quality_check: bool = False) -> tuple[Image.Image, torch.Tensor]:
     _ensure_model_loaded()
-    check_image_quality(image_path)
+    
+    if not skip_quality_check:
+        check_image_quality(image_path)
 
     image = Image.open(image_path).convert("RGB")
     transform = _build_transform(_model_input_size)
     tensor = transform(image).unsqueeze(0).to(_device)
     return image, tensor
-
 
 def predict_image(image_path: str) -> tuple[str, str, int]:
     """Return label, formatted confidence text, and predicted class index."""
@@ -314,11 +315,11 @@ def predict_image(image_path: str) -> tuple[str, str, int]:
 
     return DR_LABELS[class_idx], conf_text, class_idx
 
-
 def generate_heatmap(image_path: str, class_idx: int) -> str:
     """Generate a Grad-CAM++ overlay for a previously predicted class."""
     model = _ensure_model_loaded()
-    image, tensor = _load_image_tensor(image_path)
+    # Skip quality check here because we ALREADY checked it in predict_image
+    image, tensor = _load_image_tensor(image_path, skip_quality_check=True)
 
     # Cast to fp16 if the model is running in half-precision (CUDA)
     if _device.type == "cuda":
