@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QGridLayout, QFrame, QSizePolicy, QScrollArea, QSplitter, QAbstractSpinBox
 )
 from PySide6.QtGui import QPixmap, QFont, QRegularExpressionValidator, QIcon, QPainter, QColor, QDragEnterEvent, QDropEvent
-from PySide6.QtCore import Qt, QDate, QRegularExpression, QSize, Signal, QTimer
+from PySide6.QtCore import Qt, QDate, QRegularExpression, QSize, Signal, QTimer, QObject, QEvent
 
 from screening_styles import (
     SCREENING_PAGE_STYLE,
@@ -544,6 +544,17 @@ QCheckBox::indicator:checked { background:#3f7ca7; border-color:#3f7ca7; }
 """
 
 
+class NoScrollFilter(QObject):
+    """Event filter to block mouse wheel scrolling on input widgets."""
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Wheel:
+            # Let the event propagate to the parent (ScrollArea) so the page scrolls
+            event.ignore()
+            # Return True to stop the widget itself from handling the event
+            return True
+        return super().eventFilter(obj, event)
+
+
 class ScreeningPage(QWidget):
     """Patient screening page for DR detection with two-step workflow"""
 
@@ -581,7 +592,18 @@ class ScreeningPage(QWidget):
         self._autosave_timer.timeout.connect(self._autosave_draft)
         self.stacked_widget = QStackedWidget()
         self.init_ui()
+        self._disable_scroll_on_inputs()
         self._autosave_timer.start()
+
+    def _disable_scroll_on_inputs(self):
+        """Prevents accidental value changes when scrolling over input boxes."""
+        if not hasattr(self, "_no_scroll_filter"):
+            self._no_scroll_filter = NoScrollFilter(self)
+        
+        # Apply to all spinboxes, double spinboxes, comboboxes, and date edits
+        for widget_class in (QSpinBox, QDoubleSpinBox, QComboBox, QDateEdit):
+            for widget in self.findChildren(widget_class):
+                widget.installEventFilter(self._no_scroll_filter)
 
     def is_navigation_locked(self) -> bool:
         return bool(self._navigation_locked)
