@@ -173,10 +173,66 @@ def load_model() -> nn.Module:
 def _get_heatmap_target_layer(model: nn.Module) -> nn.Module:
     return model.backbone.features[-1]
 
-def check_image_quality(image_path: str) -> None:
-    """Quality check temporarily disabled. Re-enable by restoring the body."""
-    return
+def _laplacian_var(gray: np.ndarray) -> float:
+    """Return the variance of the Laplacian of a 2-D uint8 grayscale array.
+    Higher values indicate a sharper image."""
+    lap = (
+        gray[1:-1, 1:-1].astype(np.float32) * -4.0
+        + gray[:-2,  1:-1].astype(np.float32)
+        + gray[2:,   1:-1].astype(np.float32)
+        + gray[1:-1, :-2].astype(np.float32)
+        + gray[1:-1, 2:].astype(np.float32)
+    )
+    return float(np.var(lap))
 
+def _image_entropy(gray: np.ndarray) -> float:
+    """Calculate Shannon entropy of the image.
+    Low entropy indicates uniform/flat images without details."""
+    counts, _ = np.histogram(gray, bins=256, range=(0, 256))
+    p = counts / counts.sum()
+    p = p[p > 0]
+    return float(-np.sum(p * np.log2(p)))
+
+def check_image_quality(image_path: str) -> None:
+    """Check the uploaded image for focus, blur, poor lighting, or lack of detail before inference."""
+    try:
+        with Image.open(image_path) as img:
+            img_gray = img.convert("L")
+            # Resize a bit to normalize the variation checks across image sizes
+            img_gray.thumbnail((500, 500))
+            gray_np = np.array(img_gray)
+    except Exception as e:
+        raise ImageUngradableError(f"Could not read the image: {e}")
+
+    lap_var = _laplacian_var(gray_np)
+    mean_brightness = float(np.mean(gray_np))
+    entropy = _image_entropy(gray_np)
+
+    # Tunable thresholds: Adjust these if too strict or too lenient
+    BLUR_THRESHOLD = 25.0    
+    DARK_THRESHOLD = 15.0    
+    BRIGHT_THRESHOLD = 240.0 
+    ENTROPY_THRESHOLD = 3.5  # Typical real photos range from 5 to 8
+
+    if entropy < ENTROPY_THRESHOLD:
+        raise ImageUngradableError(
+            "Image lacks sufficient detail (too uniform or washed out). Please retake the photo."
+        )
+
+    if lap_var < BLUR_THRESHOLD:
+        raise ImageUngradableError(
+            "Image appears to be blurry or out of focus. Please retake the photo."
+        )
+        
+    if mean_brightness < DARK_THRESHOLD:
+        raise ImageUngradableError(
+            "Image is too dark. Please retake the photo with better lighting."
+        )
+        
+    if mean_brightness > BRIGHT_THRESHOLD:
+        raise ImageUngradableError(
+            "Image is overexposed or too bright. Please retake the photo with less glare."
+        )
 
 def _apply_jet(cam: np.ndarray) -> np.ndarray:
     """Apply jet colormap to an H×W float32 array in [0, 1]. Returns H×W×3 uint8."""
