@@ -639,81 +639,26 @@ class SettingsPage(QWidget):
         admin_contact_layout.addWidget(self.admin_contact_location_label, 2, 1)
         admin_contact_layout.addWidget(self.admin_contact_location_input, 3, 1)
 
-        self.referral_hospitals_group = QGroupBox("Trusted referred hospitals")
-        referral_layout = QVBoxLayout(self.referral_hospitals_group)
-        referral_layout.setSpacing(6)
+        self.backup_group = QGroupBox("Patient Records Backup")
+        backup_layout = QVBoxLayout(self.backup_group)
+        backup_layout.setSpacing(6)
 
-        self.referral_hospitals_hint = QLabel("Maintain an approved destination list for referral letters and reports.")
-        self.referral_hospitals_hint.setObjectName("metaLabel")
-        self.referral_hospitals_hint.setWordWrap(True)
-        referral_layout.addWidget(self.referral_hospitals_hint)
+        self.backup_hint = QLabel("Export all patient records to CSV. Restoring allows recovering historical data across updates.")
+        self.backup_hint.setObjectName("metaLabel")
+        self.backup_hint.setWordWrap(True)
+        backup_layout.addWidget(self.backup_hint)
 
-        self.referral_hospitals_table = QTableWidget(0, 4)
-        self.referral_hospitals_table.setHorizontalHeaderLabels(["Hospital", "Department", "Contact", "Status"])
-        self.referral_hospitals_table.setAlternatingRowColors(True)
-        self.referral_hospitals_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.referral_hospitals_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.referral_hospitals_table.setSelectionMode(QTableWidget.SingleSelection)
-        self.referral_hospitals_table.verticalHeader().setVisible(False)
-        self.referral_hospitals_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.referral_hospitals_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.referral_hospitals_table.itemSelectionChanged.connect(self._on_referral_hospital_selected)
-        self.referral_hospitals_table.setMinimumHeight(180)
-        self.referral_hospitals_table.setStyleSheet(
-            "QTableWidget::item { padding: 6px; border: none; background-color: #ffffff; }"
-            "QTableWidget::item:alternate { background-color: #f8fbff; }"
-            "QTableWidget::item:selected { background-color: #e7f0ff; color: #1f2937; }"
-        )
-        referral_layout.addWidget(self.referral_hospitals_table)
-
-        hospital_form_grid = QGridLayout()
-        hospital_form_grid.setHorizontalSpacing(8)
-        hospital_form_grid.setVerticalSpacing(6)
-        hospital_form_grid.setColumnStretch(0, 1)
-        hospital_form_grid.setColumnStretch(1, 1)
-
-        self.hospital_name_label = QLabel("Hospital Name:")
-        self.hospital_name_label.setObjectName("fieldLabel")
-        self.hospital_name_input = QLineEdit()
-        self.hospital_name_input.setPlaceholderText("e.g., St. Mary's Medical Center")
-        hospital_form_grid.addWidget(self.hospital_name_label, 0, 0)
-        hospital_form_grid.addWidget(self.hospital_name_input, 1, 0)
-
-        self.hospital_department_label = QLabel("Department:")
-        self.hospital_department_label.setObjectName("fieldLabel")
-        self.hospital_department_input = QLineEdit()
-        self.hospital_department_input.setPlaceholderText("e.g., Ophthalmology Department")
-        hospital_form_grid.addWidget(self.hospital_department_label, 0, 1)
-        hospital_form_grid.addWidget(self.hospital_department_input, 1, 1)
-
-        self.hospital_contact_label = QLabel("Contact Person:")
-        self.hospital_contact_label.setObjectName("fieldLabel")
-        self.hospital_contact_input = QLineEdit()
-        self.hospital_contact_input.setPlaceholderText("Name of referral contact")
-        hospital_form_grid.addWidget(self.hospital_contact_label, 2, 0)
-        hospital_form_grid.addWidget(self.hospital_contact_input, 3, 0)
-
-        self.hospital_phone_label = QLabel("Phone:")
-        self.hospital_phone_label.setObjectName("fieldLabel")
-        self.hospital_phone_input = QLineEdit()
-        self.hospital_phone_input.setPlaceholderText("+63 900 000 0000")
-        hospital_form_grid.addWidget(self.hospital_phone_label, 2, 1)
-        hospital_form_grid.addWidget(self.hospital_phone_input, 3, 1)
-
-        self.hospital_email_label = QLabel("Email:")
-        self.hospital_email_label.setObjectName("fieldLabel")
-        self.hospital_email_input = QLineEdit()
-        self.hospital_email_input.setPlaceholderText("referrals@hospital.org")
-        hospital_form_grid.addWidget(self.hospital_email_label, 4, 0)
-        hospital_form_grid.addWidget(self.hospital_email_input, 5, 0)
-
-        self.hospital_address_label = QLabel("Address:")
-        self.hospital_address_label.setObjectName("fieldLabel")
-        self.hospital_address_input = QLineEdit()
-        self.hospital_address_input.setPlaceholderText("City / complete address")
-        hospital_form_grid.addWidget(self.hospital_address_label, 4, 1)
-        hospital_form_grid.addWidget(self.hospital_address_input, 5, 1)
-        referral_layout.addLayout(hospital_form_grid)
+        button_layout = QHBoxLayout()
+        self.export_records_btn = QPushButton("Export as CSV")
+        self.export_records_btn.setFixedHeight(32)
+        self.export_records_btn.clicked.connect(self._export_records_csv)
+        self.import_records_btn = QPushButton("Import from CSV")
+        self.import_records_btn.setFixedHeight(32)
+        self.import_records_btn.clicked.connect(self._import_records_csv)
+        
+        button_layout.addWidget(self.export_records_btn)
+        button_layout.addWidget(self.import_records_btn)
+        backup_layout.addLayout(button_layout)
 
         compact_controls = [
             self.theme_combo,
@@ -727,38 +672,10 @@ class SettingsPage(QWidget):
             self.admin_contact_email_input,
             self.admin_contact_phone_input,
             self.admin_contact_location_input,
-            self.hospital_name_input,
-            self.hospital_department_input,
-            self.hospital_contact_input,
-            self.hospital_phone_input,
-            self.hospital_email_input,
-            self.hospital_address_input,
         ]
         for control in compact_controls:
-            control.setMaximumWidth(440)
-
-        flags_row = QHBoxLayout()
-        self.hospital_active_check = QCheckBox("Active")
-        self.hospital_active_check.setChecked(True)
-        self.hospital_default_check = QCheckBox("Set as default")
-        flags_row.addWidget(self.hospital_active_check)
-        flags_row.addWidget(self.hospital_default_check)
-        flags_row.addStretch(1)
-        referral_layout.addLayout(flags_row)
-
-        actions_row = QHBoxLayout()
-        actions_row.addStretch(1)
-        self.hospital_clear_btn = QPushButton("Clear")
-        self.hospital_clear_btn.clicked.connect(self._clear_referral_hospital_form)
-        self.hospital_save_btn = QPushButton("Save Hospital")
-        self.hospital_save_btn.setObjectName("primaryAction")
-        self.hospital_save_btn.clicked.connect(self._save_referral_hospital)
-        self.hospital_delete_btn = QPushButton("Delete")
-        self.hospital_delete_btn.clicked.connect(self._delete_referral_hospital)
-        actions_row.addWidget(self.hospital_clear_btn)
-        actions_row.addWidget(self.hospital_save_btn)
-        actions_row.addWidget(self.hospital_delete_btn)
-        referral_layout.addLayout(actions_row)
+            if hasattr(control, 'setMaximumWidth'):
+                control.setMaximumWidth(440)
 
         self._referral_hospital_rows = []
         self._referral_hospital_lookup = {}
@@ -875,7 +792,7 @@ class SettingsPage(QWidget):
             self.schedule_group,
         ):
             card.setMaximumWidth(640)
-        for wide_card in (self.referral_hospitals_group,):
+        for wide_card in (self.backup_group,):
             wide_card.setMaximumWidth(1020)
 
         schedule_btn_row = QHBoxLayout()
@@ -1076,156 +993,110 @@ class SettingsPage(QWidget):
         self.warning_label.setVisible(True)
         self.warning_spin.setVisible(True)
 
-    def _configure_referral_hospitals_section(self):
-        show_referrals = self._active_role() == "admin"
-        self.referral_hospitals_group.setVisible(show_referrals)
-        if not show_referrals:
-            return
-        if not UserManager.ensure_referral_hospitals_table():
-            self.status_label.setText("Unable to prepare referral hospital list")
-            return
-        self._reload_referral_hospitals()
+    def _configure_backup_section(self):
+        show_backup = self._active_role() == "admin"
+        self.backup_group.setVisible(show_backup)
 
-    def _reload_referral_hospitals(self):
-        self._referral_hospital_rows = UserManager.list_referral_hospitals(active_only=False)
-        self._referral_hospital_lookup = {
-            int(item.get("id")): item
-            for item in self._referral_hospital_rows
-            if item.get("id") is not None
-        }
-        self.referral_hospitals_table.setRowCount(0)
-        for item in self._referral_hospital_rows:
-            row_index = self.referral_hospitals_table.rowCount()
-            self.referral_hospitals_table.insertRow(row_index)
+    def _export_records_csv(self):
+        import csv
+        import datetime
+        from auth import get_connection
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-            hospital_item = QTableWidgetItem(str(item.get("hospital_name") or ""))
-            hospital_item.setData(Qt.UserRole, int(item.get("id") or 0))
-            self.referral_hospitals_table.setItem(row_index, 0, hospital_item)
-            self.referral_hospitals_table.setItem(row_index, 1, QTableWidgetItem(str(item.get("department") or "")))
-            contact_label = str(item.get("contact_person") or item.get("phone") or item.get("email") or "")
-            self.referral_hospitals_table.setItem(row_index, 2, QTableWidgetItem(contact_label))
-            status_chunks = ["Active" if item.get("is_active") else "Inactive"]
-            if item.get("is_default"):
-                status_chunks.append("Default")
-            self.referral_hospitals_table.setItem(row_index, 3, QTableWidgetItem(" / ".join(status_chunks)))
+        try:
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM patient_records")
+            rows = cur.fetchall()
+            
+            if not rows:
+                QMessageBox.information(self, "Export", "No patient records to export.")
+                conn.close()
+                return
 
-        self._selected_referral_hospital_id = None
-        self.hospital_delete_btn.setEnabled(False)
-        self._clear_referral_hospital_form(reset_default=True)
+            cur.execute("PRAGMA table_info(patient_records)")
+            cols = [col[1] for col in cur.fetchall()]
+            conn.close()
 
-    def _selected_referral_hospital(self):
-        row = self.referral_hospitals_table.currentRow()
-        if row < 0:
-            return None
-        id_item = self.referral_hospitals_table.item(row, 0)
-        if id_item is None:
-            return None
-        hospital_id = int(id_item.data(Qt.UserRole) or 0)
-        if not hospital_id:
-            return None
-        return self._referral_hospital_lookup.get(hospital_id)
+            default_name = f"Patient_Records_Backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            path, _ = QFileDialog.getSaveFileName(self, "Export Patient Records Backup", default_name, "CSV Files (*.csv)")
+            if not path:
+                return
+            
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(cols)
+                writer.writerows(rows)
+                
+            QMessageBox.information(self, "Export Success", f"Successfully backed up {len(rows)} patient records to:\n{path}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export records: {e}")
 
-    def _on_referral_hospital_selected(self):
-        item = self._selected_referral_hospital()
-        if not item:
-            self._selected_referral_hospital_id = None
-            self.hospital_delete_btn.setEnabled(False)
+    def _import_records_csv(self):
+        import csv
+        from auth import get_connection, UserManager
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Backup CSV", "", "CSV Files (*.csv)")
+        if not file_path:
             return
 
-        self._selected_referral_hospital_id = int(item.get("id") or 0)
-        self.hospital_name_input.setText(str(item.get("hospital_name") or ""))
-        self.hospital_department_input.setText(str(item.get("department") or ""))
-        self.hospital_contact_input.setText(str(item.get("contact_person") or ""))
-        self.hospital_phone_input.setText(str(item.get("phone") or ""))
-        self.hospital_email_input.setText(str(item.get("email") or ""))
-        self.hospital_address_input.setText(str(item.get("address") or ""))
-        self.hospital_active_check.setChecked(bool(item.get("is_active")))
-        self.hospital_default_check.setChecked(bool(item.get("is_default")))
-        self.hospital_delete_btn.setEnabled(True)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
 
-    def _clear_referral_hospital_form(self, reset_default: bool = False):
-        self._selected_referral_hospital_id = None
-        self.hospital_name_input.clear()
-        self.hospital_department_input.clear()
-        self.hospital_contact_input.clear()
-        self.hospital_phone_input.clear()
-        self.hospital_email_input.clear()
-        self.hospital_address_input.clear()
-        self.hospital_active_check.setChecked(True)
-        self.hospital_default_check.setChecked(False if reset_default else self.hospital_default_check.isChecked())
-        self.hospital_delete_btn.setEnabled(False)
-        self.referral_hospitals_table.clearSelection()
+            if not rows:
+                QMessageBox.warning(self, "Import Failed", "The selected CSV file is empty.")
+                return
 
-    def _save_referral_hospital(self):
-        if self._active_role() != "admin":
-            QMessageBox.warning(self, "Trusted Hospitals", "Only admins can manage trusted hospitals.")
-            return
+            conn = get_connection()
+            cur = conn.cursor()
+            UserManager._ensure_patient_record_columns(conn)
 
-        hospital_name = self.hospital_name_input.text().strip()
-        if not hospital_name:
-            QMessageBox.warning(self, "Validation Error", "Please enter a hospital name.")
-            self.hospital_name_input.setFocus()
-            return
+            # Map the columns
+            cur.execute("PRAGMA table_info(patient_records)")
+            valid_columns = {col[1] for col in cur.fetchall()}
 
-        ok, message, hospital_id = UserManager.upsert_referral_hospital(
-            hospital_name=hospital_name,
-            department=self.hospital_department_input.text().strip(),
-            contact_person=self.hospital_contact_input.text().strip(),
-            phone=self.hospital_phone_input.text().strip(),
-            email=self.hospital_email_input.text().strip(),
-            address=self.hospital_address_input.text().strip(),
-            is_active=self.hospital_active_check.isChecked(),
-            is_default=self.hospital_default_check.isChecked(),
-            hospital_id=self._selected_referral_hospital_id,
-        )
-        if not ok:
-            QMessageBox.warning(self, "Trusted Hospitals", message)
-            return
-
-        action_label = "Updated" if self._selected_referral_hospital_id else "Added"
-        self._reload_referral_hospitals()
-        self.status_label.setText(f"Hospital {action_label.lower()}: {hospital_name}")
-        QMessageBox.information(self, "Trusted Hospitals", f"Hospital {action_label.lower()} successfully: {hospital_name}")
-        self._clear_referral_hospital_form(reset_default=True)
-        
-        if hospital_id:
-            for row_idx in range(self.referral_hospitals_table.rowCount()):
-                id_item = self.referral_hospitals_table.item(row_idx, 0)
-                if not id_item:
+            imported = 0
+            for row in rows:
+                # skip empty rows
+                if not row.get("patient_id"):
                     continue
-                found_id = int(id_item.data(Qt.UserRole) or 0)
-                if found_id != int(hospital_id):
+                    
+                cur.execute("SELECT 1 FROM patient_records WHERE patient_id = ? AND result = ?", (row.get("patient_id"), row.get("result", "")))
+                if cur.fetchone():
                     continue
-                self.referral_hospitals_table.selectRow(row_idx)
-                self._on_referral_hospital_selected()
-                break
 
-    def _delete_referral_hospital(self):
-        item = self._selected_referral_hospital()
-        if not item:
-            QMessageBox.information(self, "Trusted Hospitals", "Select a hospital to delete.")
-            return
+                insert_cols = []
+                insert_vals = []
+                for k, v in row.items():
+                    if k in valid_columns and k != 'id':
+                        insert_cols.append(k)
+                        insert_vals.append(v)
+                
+                if not insert_cols:
+                    continue
 
-        hospital_label = str(item.get("hospital_name") or "this hospital")
-        reply = QMessageBox.question(
-            self,
-            "Delete Trusted Hospital",
-            f"Delete {hospital_label} from the trusted referral list?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
+                placeholders = ",".join(["?"] * len(insert_cols))
+                
+                cur.execute(f"INSERT INTO patient_records ({','.join(insert_cols)}) VALUES ({placeholders})", insert_vals)
+                imported += 1
 
-        ok, message = UserManager.delete_referral_hospital(int(item.get("id") or 0))
-        if not ok:
-            QMessageBox.warning(self, "Trusted Hospitals", message)
-            return
+            conn.commit()
+            conn.close()
+            
+            # Notify the user
+            QMessageBox.information(self, "Import Success", f"Successfully imported {imported} new records out of {len(rows)} total records in the backup.\n\nDuplicates were skipped.")
+            
+            # Trigger refresh for main app dashboard
+            main_window = self.window()
+            if hasattr(main_window, "refresh_dashboard"):
+                main_window.refresh_dashboard()
 
-        self._reload_referral_hospitals()
-        self.status_label.setText(f"Hospital removed: {hospital_label}")
-        QMessageBox.information(self, "Trusted Hospitals", f"Hospital removed successfully: {hospital_label}")
-        self._clear_referral_hospital_form(reset_default=True)
+        except Exception as e:
+            QMessageBox.critical(self, "Import Error", f"Failed to import CSV: {e}")
 
     def _language_pack(self, language: str) -> dict:
         from translations import get_pack
