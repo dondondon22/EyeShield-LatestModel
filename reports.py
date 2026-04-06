@@ -28,33 +28,30 @@ def _is_truthy_flag(value) -> bool:
 
 
 class PatientDetailsDialog(QDialog):
-    """Read-only dialog displaying full patient screening details without fundus image."""
+    """Read-only dialog displaying full patient screening details including fundus image."""
 
     def __init__(self, patient_record: dict, parent=None):
         super().__init__(parent)
         self.record = patient_record
         self.setWindowTitle(f"Patient Details - {patient_record.get('name', 'Unknown')}")
-        self.resize(700, 700)
-        layout = QVBoxLayout(self)
+        self.resize(1000, 700)
+        
+        layout = QHBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(14)
+        layout.setSpacing(16)
 
-        title = QLabel(f"{patient_record.get('name', 'N/A')}")
-        title.setStyleSheet("font-size:18px;font-weight:700;color:#1f4f77;")
-        layout.addWidget(title)
+        # Left side: Patient Details (scrollable)
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(left_scroll.Shape.NoFrame)
+        left_scroll.setStyleSheet("QScrollArea{border:none;background:transparent;}")
+        left_scroll.setMaximumWidth(400)
 
-        # Create scrollable content area
-        from PySide6.QtWidgets import QScrollArea
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(scroll.Shape.NoFrame)
-        scroll.setStyleSheet("QScrollArea{border:none;background:transparent;}")
-
-        content = QWidget()
-        content.setStyleSheet("background:transparent;")
-        content_layout = QVBoxLayout(content)
-        content_layout.setSpacing(16)
-        content_layout.setContentsMargins(0, 0, 0, 0)
+        left_content = QWidget()
+        left_content.setStyleSheet("background:transparent;")
+        left_layout = QVBoxLayout(left_content)
+        left_layout.setSpacing(14)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         
         # Helper function to create field rows
         def add_field(label_text: str, value_text: str):
@@ -67,12 +64,12 @@ class PatientDetailsDialog(QDialog):
             value.setWordWrap(True)
             row.addWidget(label)
             row.addWidget(value, 1)
-            content_layout.addLayout(row)
+            left_layout.addLayout(row)
         
         def add_section(section_title: str):
             sep = QLabel(section_title.upper())
             sep.setStyleSheet("font-size:12px;font-weight:700;color:#3f7ca7;margin-top:8px;letter-spacing:1px;")
-            content_layout.addWidget(sep)
+            left_layout.addWidget(sep)
         
         # Patient Information Section
         add_section("Patient Information")
@@ -134,12 +131,43 @@ class PatientDetailsDialog(QDialog):
             notes_label = QLabel(str(notes))
             notes_label.setWordWrap(True)
             notes_label.setStyleSheet("color:#475569;background:#f6f8fb;border:1px solid #d3dae3;border-radius:6px;padding:10px;")
-            content_layout.addWidget(notes_label)
+            left_layout.addWidget(notes_label)
         
-        content_layout.addStretch()
-        scroll.setWidget(content)
-        layout.addWidget(scroll)
+        left_layout.addStretch()
+        left_scroll.setWidget(left_content)
+        layout.addWidget(left_scroll)
         
+        # Right side: Fundus Image
+        right_container = QWidget()
+        right_layout = QVBoxLayout(right_container)
+        right_layout.setSpacing(10)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        
+        image_title = QLabel("FUNDUS IMAGE")
+        image_title.setStyleSheet("font-size:12px;font-weight:700;color:#3f7ca7;letter-spacing:1px;")
+        right_layout.addWidget(image_title)
+        
+        image_label = QLabel()
+        image_label.setAlignment(Qt.AlignCenter)
+        image_label.setStyleSheet("border:1px solid #d3dae3;border-radius:6px;background:#f6f8fb;")
+        image_label.setMinimumSize(500, 500)
+        
+        source_image = patient_record.get("source_image_path") or ""
+        if source_image and os.path.isfile(source_image):
+            try:
+                pixmap = QPixmap(source_image)
+                if not pixmap.isNull():
+                    scaled = pixmap.scaledToHeight(500, Qt.SmoothTransformation)
+                    image_label.setPixmap(scaled)
+                else:
+                    image_label.setText("Image could not be loaded")
+            except Exception:
+                image_label.setText("Error loading image")
+        else:
+            image_label.setText("No fundus image available")
+            
+        right_layout.addWidget(image_label, 1)
+
         # Close button
         close_btn = QPushButton("Close")
         close_btn.setMinimumHeight(36)
@@ -148,7 +176,9 @@ class PatientDetailsDialog(QDialog):
             "QPushButton:hover{background:#1b63cf;}"
         )
         close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn)
+        right_layout.addWidget(close_btn)
+        
+        layout.addWidget(right_container)
         
         self.setStyleSheet("QDialog{background:#ffffff;}")
 
@@ -611,9 +641,6 @@ class ReportsPage(QWidget):
         self.referral_btn.setEnabled(False)
         self.referral_btn.setVisible(False)
         self.referral_btn.clicked.connect(self.start_referral_flow)
-        self.rescreen_btn = QPushButton("Rescreen")
-        self.rescreen_btn.setEnabled(False)
-        self.rescreen_btn.clicked.connect(self.rescreen_patient)
 
         self._rep_subtitle_lbl.hide()
         self.status_label = QLabel("")
@@ -645,7 +672,6 @@ class ReportsPage(QWidget):
         cl.addWidget(self.export_btn)
         cl.addWidget(self.report_btn)
         cl.addWidget(self.referral_btn)
-        cl.addWidget(self.rescreen_btn)
         root.addWidget(self._controls_group)
 
         self._results_group = QGroupBox("")
@@ -720,15 +746,12 @@ class ReportsPage(QWidget):
         self._set_button_icon(self.export_btn, "export.svg")
         self._set_button_icon(self.report_btn, "generate_report.svg")
         self._set_button_icon(self.referral_btn, "referral.svg")
-        self._set_button_icon(self.rescreen_btn, "rescreen.svg")
         self.export_btn.setText("Export")
         self.report_btn.setText("Report")
         self.referral_btn.setText("Referral")
-        self.rescreen_btn.setText("Rescreen")
         self.export_btn.setToolTip("Export currently visible report rows to CSV")
         self.report_btn.setToolTip("Generate a detailed PDF report for the selected patient")
         self.referral_btn.setToolTip("Generate a referral letter PDF for the selected patient")
-        self.rescreen_btn.setToolTip("Rescreen the selected patient")
         if self.archived_records_btn is not None:
             self._set_button_icon(self.archived_records_btn, "archives.svg")
             self.archived_records_btn.setText("Archived Records")
@@ -738,7 +761,7 @@ class ReportsPage(QWidget):
             self.archive_btn.setText("Archive")
             self.archive_btn.setToolTip("Archive the selected active patient record")
 
-        top_icon_buttons = [self.export_btn, self.report_btn, self.referral_btn, self.rescreen_btn]
+        top_icon_buttons = [self.export_btn, self.report_btn, self.referral_btn]
         if self.archive_btn is not None:
             top_icon_buttons.append(self.archive_btn)
         if self.archived_records_btn is not None:
@@ -1002,8 +1025,6 @@ class ReportsPage(QWidget):
         view_action = menu.addAction("View Details")
         menu.addSeparator()
         generate_action = menu.addAction("Generate Report")
-        rescreen_action = menu.addAction("Rescreen Patient")
-        rescreen_action.setEnabled(self._can_rescreen_record(record))
         archive_action = None
         if self.is_admin:
             archive_action = menu.addAction("Archive Record")
@@ -1014,8 +1035,6 @@ class ReportsPage(QWidget):
             self._show_patient_details()
         elif chosen == generate_action:
             self.generate_report()
-        elif chosen == rescreen_action:
-            self.rescreen_patient()
         elif archive_action is not None and chosen == archive_action:
             self.archive_selected_record()
 
@@ -1030,14 +1049,6 @@ class ReportsPage(QWidget):
         self.report_btn.setEnabled(bool(record))
         self.referral_btn.setEnabled(False)
         self.referral_btn.setToolTip("Referral workflow is disabled.")
-        can_rescreen = bool(record and self._can_rescreen_record(record))
-        self.rescreen_btn.setEnabled(can_rescreen)
-        if record and not can_rescreen:
-            self.rescreen_btn.setToolTip(
-                f"Only the original screener ({self._record_owner_label(record)}) can rescreen this case."
-            )
-        else:
-            self.rescreen_btn.setToolTip("Start a new screening for the selected patient")
 
     def start_referral_flow(self):
         QMessageBox.information(self, "Referral", "Referral workflow is disabled in this build.")
@@ -1146,7 +1157,7 @@ class ReportsPage(QWidget):
                        fasting_blood_sugar, random_blood_sugar,
                        diabetes_diagnosis_date, treatment_regimen, prev_dr_stage,
                        symptom_blurred_vision, symptom_floaters, symptom_flashes,
-                       symptom_vision_loss
+                       symptom_vision_loss, source_image_path
                 FROM patient_records
                 WHERE id = ?
             """, (record_id,))
@@ -1200,6 +1211,7 @@ class ReportsPage(QWidget):
                 "symptom_floaters": row[40],
                 "symptom_flashes": row[41],
                 "symptom_vision_loss": row[42],
+                "source_image_path": row[43],
             }
         except Exception as err:
             print(f"Error fetching patient record: {err}")
@@ -1230,72 +1242,6 @@ class ReportsPage(QWidget):
             QMessageBox.warning(self, "Archive Record", "Unable to archive the selected patient record.")
             return
         self.refresh_report()
-
-    def rescreen_patient(self):
-        """Open rescreen dialog and navigate to screening page."""
-        record = self._get_selected_record()
-        if not record:
-            QMessageBox.information(self, "Rescreen Patient", "Select a patient record to rescreen.")
-            return
-
-        if not self._can_rescreen_record(record):
-            owner_text = self._record_owner_label(record)
-            UserManager.add_activity_log(
-                self.username,
-                f"RESCREEN_BLOCKED patient_id={record.get('patient_id')}; owner={owner_text}",
-            )
-            QMessageBox.warning(
-                self,
-                "Rescreen Restricted",
-                f"Only the original screening doctor ({owner_text}) can rescreen this patient.",
-            )
-            return
-
-        # Get the actual record ID - use first record_id if multiple exist
-        record_ids = record.get("record_ids") or [record.get("id")]
-        if not record_ids or not record_ids[0]:
-            QMessageBox.warning(self, "Rescreen Patient", "Unable to identify patient record ID.")
-            return
-
-        actual_record_id = record_ids[0]
-
-        label = f"{record['name'] or 'Unknown Patient'} ({record['patient_id'] or 'No ID'})"
-        box = QMessageBox(self)
-        box.setWindowTitle("Rescreen Patient")
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setText(
-            f"How would you like to rescreen <b>{label}</b>?"
-        )
-        new_btn = box.addButton("Create New Screening", QMessageBox.ButtonRole.AcceptRole)
-        replace_btn = box.addButton("Replace Screening Record", QMessageBox.ButtonRole.ActionRole)
-        cancel_btn = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(cancel_btn)
-        box.exec()
-
-        chosen = box.clickedButton()
-        if chosen == cancel_btn:
-            return
-
-        replace_mode = chosen == replace_btn
-
-        # Get main window and screening page
-        main_window = self.window()
-        if not hasattr(main_window, 'screening_page') or not hasattr(main_window, 'pages'):
-            QMessageBox.warning(self, "Navigation Error", "Unable to navigate to screening page.")
-            return
-
-        screening_page = main_window.screening_page
-        if not screening_page.load_patient_for_rescreen(actual_record_id, replace_mode=replace_mode):
-            QMessageBox.warning(self, "Load Patient", f"Failed to load patient data for rescreening.\n\nRecord ID: {actual_record_id}")
-            return
-
-        # Navigate to screening page
-        main_window.pages.setCurrentIndex(1)
-        UserManager.add_activity_log(
-            self.username,
-            f"RESCREEN_ALLOWED patient_id={record.get('patient_id')}; record_id={actual_record_id}; replace_mode={replace_mode}",
-        )
-
 
     def restore_record(self, record):
         if not record or not record["archived_at"]:

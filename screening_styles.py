@@ -13,11 +13,11 @@ DR_COLORS = {
 }
 
 DR_RECOMMENDATIONS = {
-    "No DR":            "Annual screening recommended",
-    "Mild DR":          "Repeat screening in 6–12 months",
-    "Moderate DR":      "Ophthalmology referral within 3 months",
-    "Severe DR":        "Urgent ophthalmology referral",
-    "Proliferative DR": "Immediate ophthalmology referral",
+    "No DR": "Treatment / Management:\n• Annual screening recommended\n• Standard diabetes management\n• Maintain optimal glycemic and blood pressure control",
+    "Mild DR": "Treatment / Management:\n• Repeat retinal screening in 6–12 months\n• Consider intensifying glycemic and blood pressure control\n• Routine monitoring",
+    "Moderate DR": "Treatment / Management:\n• Ophthalmology referral within 3 months\n• Reassess systemic metabolic control\n• Closer monitoring for disease progression",
+    "Severe DR": "Treatment / Management:\n• Urgent ophthalmology referral\n• Very close monitoring (every 2–3 months)\n• Consider early Anti-VEGF therapy\n• Possible Panretinal Photocoagulation (PRP) in high-risk cases\n• Aggressive systemic control (glucose, BP, lipids)",
+    "Proliferative DR": "Treatment / Management:\n• Immediate ophthalmology referral\n• Likely requires Panretinal Photocoagulation (PRP)\n• Intravitreal anti-VEGF therapy\n• Strict systemic control to minimize complications\n• Frequent specialist monitoring",
 }
 
 DR_SUMMARIES = {
