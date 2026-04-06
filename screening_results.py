@@ -51,10 +51,10 @@ def _generate_explanation(
         "No DR":            f"No signs of diabetic retinopathy were detected in {eye_phrase}",
         "Mild DR":          f"Early microaneurysms consistent with mild non-proliferative diabetic "
                             f"retinopathy (NPDR) were identified in {eye_phrase}",
-        "Moderate DR":      f"Microaneurysms, haemorrhages, and/or hard exudates consistent with "
+        "Moderate DR":      f"Microaneurysms, hemorrhages, and/or hard exudates consistent with "
                             f"moderate non-proliferative diabetic retinopathy (NPDR) were detected "
                             f"in {eye_phrase}",
-        "Severe DR":        f"Extensive haemorrhages, venous beading, or intraretinal microvascular "
+        "Severe DR":        f"Extensive hemorrhages, venous beading, or intraretinal microvascular "
                             f"abnormalities consistent with severe NPDR were detected in {eye_phrase}",
         "Proliferative DR": f"Neovascularisation indicative of proliferative diabetic retinopathy "
                             f"(PDR) — a sight-threatening condition — was detected in {eye_phrase}",
@@ -235,6 +235,7 @@ class ResultsWindow(QWidget):
         self.btn_referral.setMinimumHeight(40)
         self.btn_referral.setIconSize(QSize(18, 18))
         self.btn_referral.setEnabled(False)
+        self.btn_referral.setVisible(False)
         self.btn_referral.clicked.connect(self._show_referral_options)
 
         self.btn_screen_another = QPushButton("Screen Other Eye")
@@ -1397,7 +1398,8 @@ class ResultsWindow(QWidget):
             and result_class not in ("Analyzing…", "Pending")
         )
         self.btn_report.setEnabled(_report_ready)
-        self.btn_referral.setEnabled(_report_ready)
+        self.btn_referral.setEnabled(False)
+        self.btn_referral.setToolTip("Referral workflow is disabled.")
 
     def mark_saved(self, name, eye_label, result_class):
         """Called by ScreeningPage after a successful save to update this panel."""
@@ -1932,7 +1934,7 @@ class ResultsWindow(QWidget):
         _SUM = {
             "No DR": "No signs of diabetic retinopathy were detected in this fundus image. Continue standard diabetes management, maintain optimal glycaemic and blood pressure control, and schedule routine annual retinal screening.",
             "Mild DR": "Early microaneurysms consistent with mild non-proliferative diabetic retinopathy (NPDR) were identified. Intensify glycaemic and blood pressure management. A repeat retinal examination in 6&#8211;12 months is recommended.",
-            "Moderate DR": "Features consistent with moderate non-proliferative diabetic retinopathy (NPDR) were detected, including microaneurysms, haemorrhages, and/or hard exudates. Referral to an ophthalmologist within 3 months is advised. Reassess systemic metabolic control.",
+            "Moderate DR": "Features consistent with moderate non-proliferative diabetic retinopathy (NPDR) were detected, including microaneurysms, hemorrhages, and/or hard exudates. Referral to an ophthalmologist within 3 months is advised. Reassess systemic metabolic control.",
             "Severe DR": "Findings consistent with severe non-proliferative diabetic retinopathy (NPDR) were detected. The risk of progression to proliferative disease within 12 months is high. Urgent ophthalmology referral is required.",
             "Proliferative DR": "Proliferative diabetic retinopathy (PDR) was detected &#8212; a sight-threatening condition. Immediate ophthalmology referral is required for evaluation and potential intervention, such as laser photocoagulation or intravitreal anti-VEGF therapy.",
         }
@@ -2248,123 +2250,19 @@ img {{
                 pass
 
     def _show_referral_options(self):
-        """Show dialog to choose between internal clinical handoff or generating referral letter."""
-        if self._current_result_class in ("Pending", "Analyzing…") or not self._current_image_path:
-            QMessageBox.information(self, "Referral", "No completed screening result available for handoff.")
-            return
-
-        if self.parent_page and not getattr(self.parent_page, "_current_eye_saved", False):
-            QMessageBox.warning(self, "Referral", "Please save the result before creating a handoff.")
-            return
-
-        try:
-            from login import ReferralOptionsDialog
-        except ImportError:
-            from .login import ReferralOptionsDialog
-        
-        patient_name = str(self._current_patient_name or "Patient").strip()
-        dialog = ReferralOptionsDialog(patient_name, self)
-        
-        if dialog.exec() == QDialog.Accepted:
-            if dialog.selected_option == "internal":
-                self._show_internal_referral()
-            elif dialog.selected_option == "letter":
-                self.generate_referral()
+        """Referral workflows are disabled in this build."""
+        QMessageBox.information(self, "Referral", "Referral workflow is disabled in this build.")
+        return
 
     def _show_internal_referral(self):
-        """Show dialog to assign an internal clinical handoff."""
-        if not self._current_patient_name:
-            QMessageBox.warning(self, "Clinical Handoff", "Patient name is not available.")
-            return
-
-        try:
-            from login import AssignReferralDialog
-        except ImportError:
-            from .login import AssignReferralDialog
-        
-        patient_name_raw = str(self._current_patient_name or "Patient").strip()
-        username = self._resolve_actor_username()
-        if not username:
-            QMessageBox.warning(self, "Clinical Handoff", "Current logged-in user could not be resolved. Please sign in again.")
-            return
-        
-        while True:
-            dialog = AssignReferralDialog(patient_name_raw, self, exclude_username=username)
-            if dialog.exec() != QDialog.Accepted:
-                if getattr(dialog, "go_back", False):
-                    self._show_referral_options()
-                return
-
-            if dialog.selected_clinician == username:
-                QMessageBox.warning(self, "Clinical Handoff", "You cannot assign a handoff to yourself.")
-                continue
-
-            duplicate = UserManager.find_active_duplicate_referral(patient_name_raw, dialog.selected_clinician)
-            if duplicate:
-                status_map = {
-                    "pending": "Pending",
-                    "viewed": "Viewed",
-                    "in_review": "In Review",
-                    "completed": "Completed",
-                    "archived": "Archived",
-                }
-                status_raw = str(duplicate.get("status") or "pending").strip().lower()
-                status_label = status_map.get(status_raw, status_raw.replace("_", " ").title())
-                existing_referral_id = str(duplicate.get("referral_id") or "").strip()
-                confirm = QMessageBox.question(
-                    self,
-                    "Duplicate Handoff",
-                    (
-                        f"{patient_name_raw} already has an active handoff to this clinician "
-                        f"(Referral ID: {existing_referral_id}, Status: {status_label}).\n\n"
-                        "Create another handoff anyway?"
-                    ),
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No,
-                )
-                if confirm != QMessageBox.Yes:
-                    continue
-
-            # Create referral assignment
-            referral_id = f"REF-{datetime.now().strftime('%Y%m%d%H%M%S')}-INTERNAL"
-            base_note = "Assigned from screening results"
-            extra_note = str(getattr(dialog, "notes_text", "") or "").strip()
-            notes_value = f"{base_note}\nAdditional comments: {extra_note}" if extra_note else base_note
-            success = UserManager.assign_referral(
-                referral_id=referral_id,
-                assigned_to_username=dialog.selected_clinician,
-                assigned_by_username=username,
-                patient_name=patient_name_raw,
-                urgency=dialog.urgency_level,
-                notes=notes_value,
-            )
-            if success:
-                QMessageBox.information(
-                    self,
-                    "Clinical Handoff Assigned",
-                    "Patient handoff assigned successfully to clinician."
-                )
-                write_activity("INFO", "INTERNAL_REFERRAL_ASSIGNED", f"patient={patient_name_raw}")
-                return
-
-            QMessageBox.warning(self, "Clinical Handoff", "Failed to assign handoff. It may already be assigned.")
+        """Referral workflows are disabled in this build."""
+        QMessageBox.information(self, "Referral", "Referral workflow is disabled in this build.")
+        return
 
     def generate_referral(self):
-        """Generate a referral letter PDF from screening results."""
-        if self._current_result_class in ("Pending", "Analyzing…") or not self._current_image_path:
-            QMessageBox.information(self, "Generate Referral", "No completed screening results to generate referral.")
-            return
-
-        if self.parent_page and not getattr(self.parent_page, "_current_eye_saved", False):
-            QMessageBox.warning(self, "Generate Referral", "Please save the result before generating a referral")
-            return
-
-        destination = self._prompt_referral_destination()
-        if not destination:
-            return
-        if destination.get("_action") == "back":
-            self._show_referral_options()
-            return
+        """Referral workflows are disabled in this build."""
+        QMessageBox.information(self, "Referral", "Referral workflow is disabled in this build.")
+        return
 
         # Get patient data from parent page
         patient_name_raw = str(self._current_patient_name or "Patient").strip()

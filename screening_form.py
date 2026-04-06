@@ -1125,6 +1125,9 @@ class ScreeningPage(QWidget):
             self.btn_take_picture.setIcon(self._tinted_icon(camera_icon, "#60a5fa", 18))
             self.btn_take_picture.setIconSize(QSize(18, 18))
         self.btn_take_picture.clicked.connect(self.take_picture_for_screening)
+        self.btn_take_picture.setEnabled(False)
+        self.btn_take_picture.setVisible(False)
+        self.btn_take_picture.setToolTip("Camera capture is disabled.")
 
         self.btn_clear = QPushButton("Clear")
         self.btn_clear.setObjectName("btnDanger")
@@ -2119,52 +2122,8 @@ class ScreeningPage(QWidget):
             self._set_upload_error("")
 
     def take_picture_for_screening(self):
-        if self._guard_busy_action("opening camera capture"):
-            return
-
-        existing_image = str(getattr(self, "current_image", "") or "").strip()
-        if existing_image:
-            proceed = QMessageBox.question(
-                self,
-                "Image Already Uploaded",
-                "An image is already uploaded for this screening. Open Camera anyway?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if proceed != QMessageBox.StandardButton.Yes:
-                return
-
-        patient_id = self.p_id.text().strip()
-        if not patient_id:
-            patient_id = self.generate_patient_id()
-
-        eye_label = self.p_eye.currentText().strip()
-        if eye_label not in ("Right Eye", "Left Eye"):
-            QMessageBox.warning(
-                self,
-                "Eye Label Required",
-                "Select the eye to be screened (Right Eye or Left Eye) before taking a picture.",
-            )
-            return
-
-        main_window = self.window()
-        if main_window is self or not hasattr(main_window, "camera_page"):
-            QMessageBox.warning(self, "Camera Unavailable", "Camera page is not available in this session.")
-            return
-
-        operator = str(os.environ.get("EYESHIELD_CURRENT_NAME", "")).strip() or str(
-            os.environ.get("EYESHIELD_CURRENT_USER", "")
-        ).strip()
-        main_window.camera_page.set_capture_context(
-            patient_id=patient_id,
-            patient_name=self.p_name.text().strip(),
-            eye_label=eye_label,
-            operator=operator,
-            on_saved_callback=self._on_camera_capture_return,
-        )
-
-        if hasattr(main_window, "_navigate_to"):
-            main_window._navigate_to(2, nav_key="Camera")
+        QMessageBox.information(self, "Camera Capture", "Camera capture is disabled in this build.")
+        return
 
     def _on_camera_capture_return(self, capture_packet: dict):
         image_path = str((capture_packet or {}).get("image_path") or "").strip()

@@ -46,7 +46,7 @@ class EyeShieldApp(QMainWindow):
 
     ROLE_PAGE_ACCESS = {
         "admin": {4, 5, 6, 8, 9},
-        "clinician": {0, 1, 2, 3, 5, 6, 7},
+        "clinician": {0, 1, 2, 3, 5, 6},
         "viewer": {0, 5, 6},
     }
 
@@ -244,16 +244,6 @@ class EyeShieldApp(QMainWindow):
                 "requires_admin": True,
             },
             {
-                "icon": self._resolve_existing_path(
-                    os.path.join(icons_dir, "refferal_assignments.svg"),
-                    os.path.join(icons_dir, "referral_assignments.svg"),
-                    os.path.join(icons_dir, "referral.svg"),
-                ),
-                "label": "Referrals",
-                "page_index": 7,
-                "requires_admin": False,
-            },
-            {
                 "icon": self._resolve_existing_path(os.path.join(icons_dir, "settings.svg")),
                 "label": "Settings",
                 "page_index": 5,
@@ -352,7 +342,7 @@ class EyeShieldApp(QMainWindow):
         self.activity_log_page = ActivityLogPage()
         self.settings_page = SettingsPage()
         self.help_support_page = HelpSupportPage()
-        self.referrals_page = self.create_referrals_page()
+        self.referrals_page = QWidget()
         self.trusted_hospitals_page = TrustedHospitalsPage()
 
         # Dashboard is created after the other pages so it can be refreshed
@@ -404,9 +394,7 @@ class EyeShieldApp(QMainWindow):
         self._setup_inactivity_timeout()
         self._setup_dashboard_clock()
 
-        # Check for pending referrals and show notification if clinician
-        if self.role == "clinician":
-            QTimer.singleShot(500, self._show_pending_referrals_notification)
+        # Referral prompts are disabled in this build.
 
     def _show_pending_referrals_notification(self):
         """Show notification dialog if clinician has pending referrals"""
@@ -806,8 +794,7 @@ class EyeShieldApp(QMainWindow):
             self.reports_page.refresh_report()
         if index == 0:
             self.refresh_dashboard()
-        if index == 7:
-            self.refresh_referrals_page()
+        # Referral prompts are disabled in this build.
         if index == 8 and hasattr(self, "activity_log_page") and hasattr(self.activity_log_page, "load_activity_log"):
             self.activity_log_page.load_activity_log()
 
@@ -1037,7 +1024,6 @@ class EyeShieldApp(QMainWindow):
             "Activity Log": "usr_log",
             "Settings": "nav_settings",
             "Help": "nav_help",
-            "Referrals": "Referrals",
         }
         if hasattr(self, "nav_labels") and hasattr(self, "_nav_label_originals"):
             for label, orig in zip(self.nav_labels, self._nav_label_originals):

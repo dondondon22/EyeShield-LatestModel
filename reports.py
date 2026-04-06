@@ -623,6 +623,7 @@ class ReportsPage(QWidget):
         self.report_btn.clicked.connect(self.generate_report)
         self.referral_btn = QPushButton("Generate Referral")
         self.referral_btn.setEnabled(False)
+        self.referral_btn.setVisible(False)
         self.referral_btn.clicked.connect(self.start_referral_flow)
         self.rescreen_btn = QPushButton("Rescreen")
         self.rescreen_btn.setEnabled(False)
@@ -1015,7 +1016,6 @@ class ReportsPage(QWidget):
         view_action = menu.addAction("View Details")
         menu.addSeparator()
         generate_action = menu.addAction("Generate Report")
-        referral_action = menu.addAction("Generate Referral")
         rescreen_action = menu.addAction("Rescreen Patient")
         rescreen_action.setEnabled(self._can_rescreen_record(record))
         archive_action = None
@@ -1028,8 +1028,6 @@ class ReportsPage(QWidget):
             self._show_patient_details()
         elif chosen == generate_action:
             self.generate_report()
-        elif chosen == referral_action:
-            self.start_referral_flow()
         elif chosen == rescreen_action:
             self.rescreen_patient()
         elif archive_action is not None and chosen == archive_action:
@@ -1044,14 +1042,8 @@ class ReportsPage(QWidget):
     def _update_action_buttons(self):
         record = self._get_selected_record()
         self.report_btn.setEnabled(bool(record))
-        self.referral_btn.setEnabled(bool(record))
-        if record and not self._can_internal_referral_record(record):
-            owner = self._record_owner_label(record)
-            self.referral_btn.setToolTip(
-                f"Only Generate Letter is available. Internal referral is limited to the original screener ({owner})."
-            )
-        else:
-            self.referral_btn.setToolTip("Open referral options (Internal Referral or Generate Letter)")
+        self.referral_btn.setEnabled(False)
+        self.referral_btn.setToolTip("Referral workflow is disabled.")
         can_rescreen = bool(record and self._can_rescreen_record(record))
         self.rescreen_btn.setEnabled(can_rescreen)
         if record and not can_rescreen:
@@ -1062,35 +1054,8 @@ class ReportsPage(QWidget):
             self.rescreen_btn.setToolTip("Start a new screening for the selected patient")
 
     def start_referral_flow(self):
-        record = self._get_selected_record()
-        if not record:
-            QMessageBox.information(self, "Referral", "Select a patient record first.")
-            return
-
-        if not self._can_internal_referral_record(record):
-            owner = self._record_owner_label(record)
-            QMessageBox.information(
-                self,
-                "Referral",
-                f"Only Generate Letter is available for this record. Internal referral is limited to the original screener ({owner}).",
-            )
-            self.generate_referral()
-            return
-
-        try:
-            from login import ReferralOptionsDialog
-        except ImportError:
-            from .login import ReferralOptionsDialog
-
-        patient_name = str(record.get("name") or "Patient").strip()
-        dialog = ReferralOptionsDialog(patient_name, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        if dialog.selected_option == "internal":
-            self._show_internal_referral_from_record(record)
-        elif dialog.selected_option == "letter":
-            self.generate_referral()
+        QMessageBox.information(self, "Referral", "Referral workflow is disabled in this build.")
+        return
 
     def _show_internal_referral_from_record(self, record: dict):
         full = self._fetch_full_record(record.get("id")) or record
@@ -2197,19 +2162,8 @@ class ReportsPage(QWidget):
         QMessageBox.information(self, "Report Saved", f"Patient report saved to:\n{path}")
 
     def generate_referral(self):
-        record = self._get_selected_record()
-        if not record:
-            QMessageBox.information(self, "Generate Referral", "Select a patient record to generate a referral letter.")
-            return
-
-        full = self._fetch_full_record(record["id"]) or record
-        eye_records = self._fetch_report_eye_records(
-            full.get("patient_id"),
-            full.get("screened_at"),
-            int(full.get("id") or record["id"]),
-        )
-        if not eye_records:
-            eye_records = [full]
+        QMessageBox.information(self, "Referral", "Referral workflow is disabled in this build.")
+        return
 
         severity_rank = {
             "No DR": 0,

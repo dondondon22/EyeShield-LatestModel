@@ -2,7 +2,7 @@
 DR inference module for EyeShield screening.
 
 The local weights file is expected at:
-    models/final_model.pth or models/best_model.pt
+    models/final_model_deepdrid.pth, models/best_model.pt or models/final_model.pth
 
 Classes:
     0 → No DR
@@ -94,11 +94,14 @@ def _build_edl_efficientnet_b3() -> nn.Module:
 _MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
 def _resolve_default_model_path() -> str:
-    """Use final_model as the default weights path, with best_model fallback."""
-    final_path = os.path.join(_MODEL_DIR, "final_model.pth")
-    if os.path.isfile(final_path):
-        return final_path
-    return os.path.join(_MODEL_DIR, "best_model.pt")
+    """Use final_model_deepdrid as the default weights path, with fallbacks."""
+    deepdrid_path = os.path.join(_MODEL_DIR, "final_model_deepdrid.pth")
+    if os.path.isfile(deepdrid_path):
+        return deepdrid_path
+    best_path = os.path.join(_MODEL_DIR, "best_model.pt")
+    if os.path.isfile(best_path):
+        return best_path
+    return os.path.join(_MODEL_DIR, "final_model.pth")
 
 MODEL_PATH = _resolve_default_model_path()
 
@@ -209,7 +212,7 @@ def check_image_quality(image_path: str) -> None:
     entropy = _image_entropy(gray_np)
 
     # Tunable thresholds: Adjust these if too strict or too lenient
-    BLUR_THRESHOLD = 25.0    
+    BLUR_THRESHOLD = 15.0    
     DARK_THRESHOLD = 15.0    
     BRIGHT_THRESHOLD = 240.0 
     ENTROPY_THRESHOLD = 3.5  # Typical real photos range from 5 to 8
@@ -409,6 +412,112 @@ def generate_heatmap(image_path: str, class_idx: int) -> str:
             bwd_handle.remove()
 
     return heatmap_path
+
+
+def generate_heatmap_debug_steps(image_path: str, class_idx: int) -> dict[str, object]:
+    """Return Grad-CAM++ intermediate arrays and metadata for step-by-step debugging.
+
+    This helper is intended for standalone visualization tools and discussions.
+    The returned arrays are all resized to the model input size and are safe to display.
+    """
+    model = _ensure_model_loaded()
+    image, tensor = _load_image_tensor(image_path, skip_quality_check=True)
+
+    if _device.type == "cuda":
+        tensor = tensor.half()
+
+    fwd_handle = None
+    bwd_handle = None
+    try:
+        activations: dict[str, torch.Tensor] = {}
+        gradients: dict[str, torch.Tensor] = {}
+        target_layer = _get_heatmap_target_layer(model)
+
+        fwd_handle = target_layer.register_forward_hook(
+            lambda m, inp, out: activations.__setitem__(
+                "A", out[0] if isinstance(out, (tuple, list)) else out
+            )
+        )
+        bwd_handle = target_layer.register_full_backward_hook(
+            lambda m, gin, gout: gradients.__setitem__(
+                "G", gout[0] if isinstance(gout, (tuple, list)) else gout
+            )
+        )
+
+        model.zero_grad()
+        logits = model(tensor)
+        logits[0, class_idx].backward()
+
+        if "A" not in activations or "G" not in gradients:
+            raise RuntimeError("Failed to capture activations/gradients for Grad-CAM++.")
+
+        A = activations["A"][0].detach().float()
+        G = gradients["G"][0].detach().float()
+
+        G2 = G ** 2
+        G3 = G ** 3
+        A_sum = A.sum(dim=(1, 2), keepdim=True)
+        alpha = G2 / (2 * G2 + A_sum * G3 + 1e-7)
+        weights = (alpha * torch.relu(G)).sum(dim=(1, 2))
+
+        cam_raw = torch.relu((weights[:, None, None] * A).sum(dim=0))
+        cam_raw_np = cam_raw.cpu().numpy()
+
+        p_min, p_max = np.percentile(cam_raw_np, [5, 99])
+        cam_clipped_np = np.clip(cam_raw_np, p_min, p_max)
+
+        cam_min, cam_max = cam_clipped_np.min(), cam_clipped_np.max()
+        cam_norm_np = (cam_clipped_np - cam_min) / (cam_max - cam_min + 1e-7)
+
+        cam_gamma_np = cam_norm_np ** 0.8
+
+        cam_pil = Image.fromarray((cam_gamma_np * 255).astype(np.uint8)).resize(
+            (_model_input_size, _model_input_size), Image.BILINEAR
+        )
+        cam_pil = cam_pil.filter(ImageFilter.GaussianBlur(radius=1.0))
+        cam_blur_np = np.array(cam_pil).astype(np.float32) / 255.0
+
+        heatmap_rgb = _apply_jet(cam_blur_np)
+        orig_np = np.array(image.resize((_model_input_size, _model_input_size), Image.BILINEAR))
+
+        overlay = (0.70 * orig_np + 0.30 * heatmap_rgb).clip(0, 255).astype(np.uint8)
+
+        gray_orig = orig_np.mean(axis=2)
+        mask = gray_orig > 10
+        overlay_masked = overlay.copy()
+        overlay_masked[~mask] = orig_np[~mask]
+
+        # Channel-mean maps are useful for explaining what hooks captured.
+        act_map = A.mean(dim=0).cpu().numpy()
+        grad_map = G.abs().mean(dim=0).cpu().numpy()
+
+        return {
+            "class_idx": int(class_idx),
+            "input_size": int(_model_input_size),
+            "percentile_min": float(p_min),
+            "percentile_max": float(p_max),
+            "raw_min": float(cam_raw_np.min()),
+            "raw_max": float(cam_raw_np.max()),
+            "clip_min": float(cam_min),
+            "clip_max": float(cam_max),
+            "original": orig_np,
+            "activation_map": act_map,
+            "gradient_map": grad_map,
+            "cam_raw": cam_raw_np,
+            "cam_clipped": cam_clipped_np,
+            "cam_normalized": cam_norm_np,
+            "cam_gamma": cam_gamma_np,
+            "cam_blur": cam_blur_np,
+            "heatmap_rgb": heatmap_rgb,
+            "overlay": overlay,
+            "overlay_masked": overlay_masked,
+            "background_mask": mask,
+        }
+    finally:
+        if fwd_handle is not None:
+            fwd_handle.remove()
+        if bwd_handle is not None:
+            bwd_handle.remove()
 
 
 def run_inference(image_path: str) -> tuple[str, str, str]:
