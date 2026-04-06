@@ -35,7 +35,6 @@ from reports import ReportsPage
 from users import UsersPage, ActivityLogPage
 from settings import SettingsPage, DARK_STYLESHEET
 from help_support import HelpSupportPage
-from trusted_hospitals import TrustedHospitalsPage
 from auth import DB_FILE, UserManager
 from user_auth import get_user_profile
 
@@ -228,14 +227,6 @@ class EyeShieldApp(QMainWindow):
                 "requires_admin": True,
             },
             {
-                "icon": self._resolve_existing_path(os.path.join(icons_dir, "trusted referred hospitals.svg")),
-                "label": "Trusted Referrals",
-                "display_label": "Trusted\nReferrals",
-                "page_index": 9,
-                "nav_key": "trusted_referrals",
-                "requires_admin": True,
-            },
-            {
                 "icon": self._resolve_existing_path(os.path.join(icons_dir, "settings.svg")),
                 "label": "Settings",
                 "page_index": 5,
@@ -334,25 +325,23 @@ class EyeShieldApp(QMainWindow):
         self.activity_log_page = ActivityLogPage()
         self.settings_page = SettingsPage()
         self.help_support_page = HelpSupportPage()
-        self.referrals_page = QWidget()
-        self.trusted_hospitals_page = TrustedHospitalsPage()
 
         # Dashboard is created after the other pages so it can be refreshed
         self.dashboard_page = self.create_dashboard_page()
 
         self.users_page.parent_app = self
         self.activity_log_page.parent_app = self
-
-        self.pages.addWidget(self.dashboard_page)
-        self.pages.addWidget(self.screening_page)
-        self.pages.addWidget(QWidget())  # Placeholder for removed camera page to preserve indices
-        self.pages.addWidget(self.reports_page)
-        self.pages.addWidget(self.users_page)
-        self.pages.addWidget(self.settings_page)
-        self.pages.addWidget(self.help_support_page)
-        self.pages.addWidget(self.referrals_page)
-        self.pages.addWidget(self.activity_log_page)
-        self.pages.addWidget(self.trusted_hospitals_page)
+        
+        # Add widgets in exact order of their expected page_indices:
+        self.pages.addWidget(self.dashboard_page)       # Index 0
+        self.pages.addWidget(self.screening_page)       # Index 1
+        self.pages.addWidget(QWidget())                 # Index 2 (Placeholder for Removed Camera Page)
+        self.pages.addWidget(self.reports_page)         # Index 3
+        self.pages.addWidget(self.users_page)           # Index 4
+        self.pages.addWidget(self.settings_page)        # Index 5
+        self.pages.addWidget(self.help_support_page)    # Index 6
+        self.pages.addWidget(QWidget())                 # Index 7 (Placeholder for Removed Referrals Page)
+        self.pages.addWidget(self.activity_log_page)    # Index 8
         self.pages.currentChanged.connect(self._on_page_changed)
 
         main_layout.addWidget(self.pages)
@@ -385,26 +374,6 @@ class EyeShieldApp(QMainWindow):
 
         self._setup_inactivity_timeout()
         self._setup_dashboard_clock()
-
-        # Referral prompts are disabled in this build.
-
-    def _show_pending_referrals_notification(self):
-        """Show notification dialog if clinician has pending referrals"""
-        referrals = UserManager.get_pending_referrals(self.username)
-        if referrals:
-            try:
-                from login import PendingReferralsDialog
-            except ImportError:
-                from .login import PendingReferralsDialog
-            
-            dialog = PendingReferralsDialog(self.username, referrals, self)
-            result = dialog.exec()
-            if result == 1:  # Accept button clicked
-                # Mark all pending referrals as viewed
-                for referral in referrals:
-                    UserManager.update_referral_status(referral["referral_id"], "viewed", self.username)
-                if getattr(dialog, "go_to_referrals", False):
-                    self._navigate_to(7)
 
     @classmethod
     def _allowed_pages_for_role(cls, role: str) -> set[int]:
