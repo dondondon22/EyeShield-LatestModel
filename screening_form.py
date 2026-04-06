@@ -2995,7 +2995,7 @@ class ScreeningPage(QWidget):
             json.dumps(pre_signature_payload, ensure_ascii=True, sort_keys=True).encode("utf-8")
         ).hexdigest()
 
-        screened_at = datetime.now().strftime("%Y-%m-%d")
+        screened_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         screener_username = str(os.environ.get("EYESHIELD_CURRENT_USER", "")).strip()
         screener_name = str(os.environ.get("EYESHIELD_CURRENT_NAME", "")).strip() or screener_username
 

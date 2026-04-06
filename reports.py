@@ -378,7 +378,6 @@ class ReportsPage(QWidget):
         self.results_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setShowGrid(False)
-        self.results_table.setSortingEnabled(True)
         self.results_table.verticalHeader().setVisible(False)
         self.results_table.verticalHeader().setDefaultSectionSize(42)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -564,7 +563,6 @@ class ReportsPage(QWidget):
         self._render_results_table()
 
     def _render_results_table(self):
-        self.results_table.setSortingEnabled(False)
         self.results_table.setRowCount(0)
         result_color = self._result_color_for_current_theme
         for row in self._filtered_rows:
@@ -596,7 +594,6 @@ class ReportsPage(QWidget):
             screened_by_item = QTableWidgetItem(str(row.get('screened_by') or '--'))
             screened_by_item.setTextAlignment(Qt.AlignCenter)
             self.results_table.setItem(i, 6, screened_by_item)
-        self.results_table.setSortingEnabled(True)
         self.results_table.resizeRowsToContents()
         if hasattr(self, 'filtered_count_label'):
             self.filtered_count_label.setText(f'Total: {len(self._filtered_rows)}')

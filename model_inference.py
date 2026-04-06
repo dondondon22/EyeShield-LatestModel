@@ -213,7 +213,7 @@ def check_image_quality(image_path: str) -> None:
 
     # Tunable thresholds: Adjust these if too strict or too lenient
     BLUR_THRESHOLD = 15.0    
-    DARK_THRESHOLD = 15.0    
+    DARK_THRESHOLD = 25.0    
     BRIGHT_THRESHOLD = 240.0 
     ENTROPY_THRESHOLD = 3.5  # Typical real photos range from 5 to 8
 
@@ -312,8 +312,8 @@ def predict_image(image_path: str) -> tuple[str, str, int]:
     S = alpha.sum()
     probs = alpha / S
     class_idx = int(alpha.argmax())
-    confidence = float(probs[class_idx]) * 100.0 +30
-    vacuity = float(len(DR_LABELS) / S) * 100.0 - 30
+    confidence = float(probs[class_idx]) * 100.0
+    vacuity = float(len(DR_LABELS) / S) * 100.0
     conf_text = f"Confidence: {confidence:.1f}%  |  Uncertainty: {vacuity:.1f}%"
 
     return DR_LABELS[class_idx], conf_text, class_idx
