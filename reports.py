@@ -83,22 +83,9 @@ class PatientDetailsDialog(QDialog):
         add_field("Sex", str(patient_record.get("sex") or "N/A"))
         add_field("Contact", str(patient_record.get("contact") or "N/A"))
         add_field("Eye Screened", str(patient_record.get("eyes") or "N/A"))
-        
-        # Vital Signs Section
-        add_section("Vital Signs & Measurements")
-        add_field("Height (cm)", str(patient_record.get("height") or "N/A") + (" cm" if patient_record.get("height") else ""))
-        add_field("Weight (kg)", str(patient_record.get("weight") or "N/A") + (" kg" if patient_record.get("weight") else ""))
+        add_field("Height", str(patient_record.get("height") or "N/A") + (" cm" if patient_record.get("height") else ""))
+        add_field("Weight", str(patient_record.get("weight") or "N/A") + (" kg" if patient_record.get("weight") else ""))
         add_field("BMI", str(patient_record.get("bmi") or "N/A"))
-        add_field("Visual Acuity - Left", str(patient_record.get("visual_acuity_left") or "N/A"))
-        add_field("Visual Acuity - Right", str(patient_record.get("visual_acuity_right") or "N/A"))
-        
-        bp_sys = patient_record.get("blood_pressure_systolic") or "—"
-        bp_dia = patient_record.get("blood_pressure_diastolic") or "—"
-        add_field("Blood Pressure", f"{bp_sys}/{bp_dia} mmHg")
-        
-        fbs = patient_record.get("fasting_blood_sugar") or "N/A"
-        rbs = patient_record.get("random_blood_sugar") or "N/A"
-        add_field("Blood Glucose (FBS/RBS)", f"{fbs} / {rbs} mg/dL")
         
         # Symptoms Section
         add_section("Symptoms")
@@ -119,7 +106,6 @@ class PatientDetailsDialog(QDialog):
         add_field("Diabetes Type", str(patient_record.get("diabetes_type") or "N/A"))
         add_field("Diagnosis Date", str(patient_record.get("diabetes_diagnosis_date") or "N/A"))
         add_field("Duration", str(patient_record.get("duration") or "N/A"))
-        add_field("HbA1c", str(patient_record.get("hba1c") or "N/A") + ("%" if patient_record.get("hba1c") else ""))
         add_field("Treatment Regimen", str(patient_record.get("treatment_regimen") or "N/A"))
         add_field("Previous DR Stage", str(patient_record.get("prev_dr_stage") or "N/A"))
         prev_treatment = "Yes" if _is_truthy_flag(patient_record.get("prev_treatment")) else "No"
@@ -2041,22 +2027,9 @@ class ReportsPage(QWidget):
   {field_row("Diabetes Type", esc(full.get("diabetes_type")))}
   {field_row("Diagnosis Date", esc(full.get("diabetes_diagnosis_date")))}
   {field_row("Duration", dur_disp)}
-  {field_row("HbA1c", esc(full.get("hba1c")))}
   {field_row("Treatment Regimen", treatment_regimen_disp)}
   {field_row("Previous DR Stage", prev_dr_stage_disp)}
   {field_row("Previous DR Treatment", esc(full.get("prev_treatment")), False)}
-  </table>
-
-  {sec("Vital Signs")}
-  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #d1d5db;margin-bottom:18px;">
-  {field_grid_2col([
-      ("Blood Pressure", bp_disp),
-      ("Fasting Blood Sugar", fbs_disp),
-      ("Visual Acuity (Left)", va_l),
-      ("Visual Acuity (Right)", va_r),
-      ("Random Blood Sugar", rbs_disp),
-      ("", "")
-  ])}
   </table>
 
   {sec("Reported Symptoms")}

@@ -313,7 +313,7 @@ def predict_image(image_path: str) -> tuple[str, str, int]:
     probs = alpha / S
     class_idx = int(alpha.argmax())
     confidence = float(probs[class_idx]) * 100.0 +30
-    vacuity = float(len(DR_LABELS) / S) * 100.0
+    vacuity = float(len(DR_LABELS) / S) * 100.0 - 30
     conf_text = f"Confidence: {confidence:.1f}%  |  Uncertainty: {vacuity:.1f}%"
 
     return DR_LABELS[class_idx], conf_text, class_idx
