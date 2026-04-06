@@ -36,7 +36,6 @@ from users import UsersPage, ActivityLogPage
 from settings import SettingsPage, DARK_STYLESHEET
 from help_support import HelpSupportPage
 from trusted_hospitals import TrustedHospitalsPage
-from camera import CameraPage
 from auth import DB_FILE, UserManager
 from user_auth import get_user_profile
 
@@ -46,8 +45,7 @@ class EyeShieldApp(QMainWindow):
 
     ROLE_PAGE_ACCESS = {
         "admin": {4, 5, 6, 8, 9},
-        "clinician": {0, 1, 2, 3, 5, 6},
-        "viewer": {0, 5, 6},
+        "clinician": {0, 1, 3, 5, 6},
     }
 
     def __init__(self, username, role, display_name=None, full_name=None, specialization=None, contact=None):
@@ -209,12 +207,6 @@ class EyeShieldApp(QMainWindow):
                 "requires_admin": False,
             },
             {
-                "icon": self._resolve_existing_path(os.path.join(icons_dir, "camera.svg")),
-                "label": "Camera",
-                "page_index": 2,
-                "requires_admin": False,
-            },
-            {
                 "icon": self._resolve_existing_path(os.path.join(icons_dir, "reports.svg")),
                 "label": "Reports",
                 "page_index": 3,
@@ -330,7 +322,7 @@ class EyeShieldApp(QMainWindow):
         self.screening_page.username = self.username
         self.screening_page.display_name = self.display_name
         self.screening_page.role = self.role
-        self.camera_page = CameraPage()
+        
         self.reports_page = ReportsPage(
             self.username,
             self.role,
@@ -353,7 +345,7 @@ class EyeShieldApp(QMainWindow):
 
         self.pages.addWidget(self.dashboard_page)
         self.pages.addWidget(self.screening_page)
-        self.pages.addWidget(self.camera_page)
+        self.pages.addWidget(QWidget())  # Placeholder for removed camera page to preserve indices
         self.pages.addWidget(self.reports_page)
         self.pages.addWidget(self.users_page)
         self.pages.addWidget(self.settings_page)
@@ -416,7 +408,7 @@ class EyeShieldApp(QMainWindow):
 
     @classmethod
     def _allowed_pages_for_role(cls, role: str) -> set[int]:
-        return set(cls.ROLE_PAGE_ACCESS.get(str(role or "").lower(), cls.ROLE_PAGE_ACCESS["viewer"]))
+        return set(cls.ROLE_PAGE_ACCESS.get(str(role or "").lower(), cls.ROLE_PAGE_ACCESS["clinician"]))
 
     def _is_page_allowed(self, index: int) -> bool:
         return index in self.allowed_pages
@@ -724,30 +716,6 @@ class EyeShieldApp(QMainWindow):
                 self._active_nav_key = self._default_nav_key_for_page(1)
                 self._set_active_nav(1)
             return
-        if index == 2 and hasattr(self, "camera_page") and hasattr(self, "screening_page"):
-            has_context = True
-            if hasattr(self.camera_page, "has_active_screening_session"):
-                has_context = bool(self.camera_page.has_active_screening_session())
-            elif hasattr(self.camera_page, "has_required_capture_context"):
-                has_context = bool(self.camera_page.has_required_capture_context())
-            if not has_context:
-                response = QMessageBox.question(
-                    self,
-                    "Screening Context Required",
-                    "No patient screening context was found for Camera capture.\n\n"
-                    "Go to Screening first to select patient and eye?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.Yes,
-                )
-                if response == QMessageBox.StandardButton.Yes:
-                    self._active_nav_key = self._default_nav_key_for_page(1)
-                    self.pages.setCurrentIndex(1)
-                    self._set_active_nav(1)
-                else:
-                    current_index = int(self.pages.currentIndex()) if hasattr(self, "pages") else 0
-                    self._active_nav_key = self._default_nav_key_for_page(current_index)
-                    self._set_active_nav(current_index)
-                return
         if not self._is_page_allowed(index):
             if show_denied_message:
                 QMessageBox.warning(self, "Access Denied", "Your account role cannot access this page.")
@@ -786,10 +754,6 @@ class EyeShieldApp(QMainWindow):
             return
         self._active_nav_key = self._default_nav_key_for_page(index)
         self._set_active_nav(index)
-        if index == 2:
-            self.camera_page.enter_page()
-        else:
-            self.camera_page.leave_page()
         if index == 3:
             self.reports_page.refresh_report()
         if index == 0:
@@ -1018,7 +982,6 @@ class EyeShieldApp(QMainWindow):
         _nav_key_map = {
             "Dashboard": "nav_dashboard",
             "Screening": "nav_screening",
-            "Camera": "nav_camera",
             "Reports": "nav_reports",
             "Users": "nav_users",
             "Activity Log": "usr_log",
@@ -1052,7 +1015,6 @@ class EyeShieldApp(QMainWindow):
 
         # Propagate to all sub-pages
         for page in (
-            self.camera_page,
             self.screening_page,
             self.reports_page,
             self.users_page,
@@ -1562,17 +1524,12 @@ class EyeShieldApp(QMainWindow):
         card_patients, self.unique_patients_value = \
             make_kpi_card("kpiPatients", "NO DR CASES", "#2e7d32")
 
-        # Card 3: Abnormal Cases
-        card_abnormal, self.abnormal_cases_value = \
-            make_kpi_card("kpiAbnormal", "ABNORMAL CASES", "#f59e0b")
-
         # Card 4: High Risk Cases
         card_high_risk, self.high_risk_cases_value = \
             make_kpi_card("kpiHighRisk", "HIGH RISK CASES", "#dc3545")
 
         kpi_row.addWidget(card_total, 1)
         kpi_row.addWidget(card_patients, 1)
-        kpi_row.addWidget(card_abnormal, 1)
         kpi_row.addWidget(card_high_risk, 1)
         layout.addLayout(kpi_row)
 
@@ -2966,7 +2923,6 @@ class EyeShieldApp(QMainWindow):
                     high_risk_count += 1
 
         style_kpi("kpiPatients", sev_green, self.unique_patients_value, str(no_dr_count))
-        style_kpi("kpiAbnormal", "#f59e0b", self.abnormal_cases_value, str(abnormal_count))
         style_kpi("kpiHighRisk", "#dc3545", self.high_risk_cases_value, str(high_risk_count))
 
         # My availability card
@@ -3065,7 +3021,6 @@ class EyeShieldApp(QMainWindow):
 
         metric_defs = {
             "impactHigh": ("High Risk", high_risk_count, "#ce3e3e" if not dark else "#ff6b6b"),
-            "impactAbnormal": ("Abnormal", abnormal_count, "#d99610" if not dark else "#f2c96d"),
             "impactClear": ("No DR", no_dr_count, sev_green),
         }
         for chip_name, (title_text, value, accent) in metric_defs.items():

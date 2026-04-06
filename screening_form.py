@@ -949,17 +949,17 @@ class ScreeningPage(QWidget):
 
         c1.addLayout(field("Contact", self.p_contact, "scr_label_contact"))
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("background:#dde3ea;max-height:1px;margin-top:4px;")
-        c1.addWidget(sep)
-        section_title(c1, "Vital Signs & Symptoms")
+        # sep = QFrame()
+        # sep.setFrameShape(QFrame.Shape.HLine)
+        # sep.setStyleSheet("background:#dde3ea;max-height:1px;margin-top:4px;")
+        # c1.addWidget(sep)
+        # section_title(c1, "Vital Signs & Symptoms")
 
         self.va_left = QLineEdit()
         self.va_left.setPlaceholderText("e.g. 20/20")
         self.va_right = QLineEdit()
         self.va_right.setPlaceholderText("e.g. 20/20")
-        c1.addLayout(row2(field("Visual Acuity — Left", self.va_left), field("Visual Acuity — Right", self.va_right)))
+        # c1.addLayout(row2(field("Visual Acuity — Left", self.va_left), field("Visual Acuity — Right", self.va_right)))
 
         self.bp_systolic = QSpinBox()
         self.bp_systolic.setRange(0, 300)
@@ -1004,9 +1004,9 @@ class ScreeningPage(QWidget):
         bg_h.addWidget(self.fbs, 1)
         bg_h.addWidget(_rl)
         bg_h.addWidget(self.rbs, 1)
-        c1.addLayout(row2(field("Blood Pressure", bp_w), field("Blood Glucose", bg_w)))
+        # c1.addLayout(row2(field("Blood Pressure", bp_w), field("Blood Glucose", bg_w)))
 
-        c1.addWidget(lbl("Symptoms"))
+        # c1.addWidget(lbl("Symptoms"))
         tags_h = QHBoxLayout()
         tags_h.setSpacing(8)
         tags_h.setContentsMargins(0, 0, 0, 0)
@@ -1024,7 +1024,7 @@ class ScreeningPage(QWidget):
         )
         tags_h.addWidget(self.symptom_other)
         tags_h.addStretch()
-        c1.addLayout(tags_h)
+        # c1.addLayout(tags_h)
         left_col.addWidget(card1)
 
         card2, c2 = make_card()
@@ -1047,6 +1047,8 @@ class ScreeningPage(QWidget):
         self.diabetes_duration.setStyleSheet(
             "QSpinBox{background:#f6f8fb;color:#475569;border:1.5px solid #d3dae3;border-radius:6px;padding:6px 10px;}"
         )
+        c2.addLayout(field("Duration", self.diabetes_duration, "scr_label_duration"))
+
         self.hba1c = QDoubleSpinBox()
         self.hba1c.setRange(0.0, 20.0)
         self.hba1c.setDecimals(1)
@@ -1054,12 +1056,12 @@ class ScreeningPage(QWidget):
         self.hba1c.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         self.hba1c.setSpecialValueText(" ")
         self.hba1c.setValue(0.0)
-        self.hba1c.valueChanged.connect(self._on_hba1c_changed)
-        c2.addLayout(row2(field("Duration", self.diabetes_duration, "scr_label_duration"), field("HbA1c (%)", self.hba1c, "scr_label_hba1c")))
+        # self.hba1c.valueChanged.connect(self._on_hba1c_changed)
+        # c2.addLayout(row2(field("Duration", self.diabetes_duration, "scr_label_duration"), field("HbA1c (%)", self.hba1c, "scr_label_hba1c")))
         self.hba1c_warn_label = QLabel("")
         self.hba1c_warn_label.setStyleSheet("color:#b45309;background:transparent;font-size:12px;font-weight:600;")
         self.hba1c_warn_label.hide()
-        c2.addWidget(self.hba1c_warn_label)
+        # c2.addWidget(self.hba1c_warn_label)
 
         # Treatment regimen dropdown
         self.treatment_regimen = QComboBox()

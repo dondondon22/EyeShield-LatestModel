@@ -31,13 +31,11 @@ import user_store
 _ROLE_COLORS = {
     "admin":     ("#c0392b", "#fdf2f2"),
     "clinician": ("#0d6efd", "#eef3ff"),
-    "viewer":    ("#6c757d", "#f3f4f6"),
 }
 
 _ROLE_COLORS_DARK = {
     "admin":     ("#f38ba8", "#3d1f2d"),
     "clinician": ("#89b4fa", "#1f2f4f"),
-    "viewer":    ("#bac2de", "#2f3348"),
 }
 
 _SPECIALIZATION_OPTIONS = ["Optometrist", "Ophthalmologist"]
@@ -507,11 +505,9 @@ _PAGE_STYLE = """
     QLabel#usrStatTotal,
     QLabel#usrStatAdmin,
     QLabel#usrStatSpecialists,
-    QLabel#usrStatViewer,
     QPushButton#usrStatTotal,
     QPushButton#usrStatAdmin,
-    QPushButton#usrStatSpecialists,
-    QPushButton#usrStatViewer {
+    QPushButton#usrStatSpecialists {
         border-radius: 12px;
         padding: 6px 10px;
         font-size: 11px;
@@ -536,12 +532,6 @@ _PAGE_STYLE = """
         background: #e8f7ef;
         border-color: #b7e4c7;
     }
-    QLabel#usrStatViewer,
-    QPushButton#usrStatViewer {
-        color: #495057;
-        background: #f1f3f5;
-        border-color: #dee2e6;
-    }
     QLabel#usrActivityMeta {
         color: #3d5b7a;
         background: #ebf3ff;
@@ -553,14 +543,12 @@ _PAGE_STYLE = """
     }
     QPushButton#usrStatTotal:checked,
     QPushButton#usrStatAdmin:checked,
-    QPushButton#usrStatSpecialists:checked,
-    QPushButton#usrStatViewer:checked {
+    QPushButton#usrStatSpecialists:checked {
         border-width: 2px;
     }
     QPushButton#usrStatTotal:hover,
     QPushButton#usrStatAdmin:hover,
-    QPushButton#usrStatSpecialists:hover,
-    QPushButton#usrStatViewer:hover {
+    QPushButton#usrStatSpecialists:hover {
         border-width: 2px;
     }
     QWidget#usrNotifyBar {
@@ -875,11 +863,9 @@ _ACTIVITY_LOG_STYLE = """
     QLabel#usrStatTotal,
     QLabel#usrStatAdmin,
     QLabel#usrStatSpecialists,
-    QLabel#usrStatViewer,
     QPushButton#usrStatTotal,
     QPushButton#usrStatAdmin,
-    QPushButton#usrStatSpecialists,
-    QPushButton#usrStatViewer {
+    QPushButton#usrStatSpecialists {
         border-radius: 999px;
         padding: 6px 12px;
         font-size: 11px;
@@ -890,16 +876,14 @@ _ACTIVITY_LOG_STYLE = """
     }
     QPushButton#usrStatTotal:checked,
     QPushButton#usrStatAdmin:checked,
-    QPushButton#usrStatSpecialists:checked,
-    QPushButton#usrStatViewer:checked {
+    QPushButton#usrStatSpecialists:checked {
         background: #eff6ff;
         color: #2563eb;
         border-color: #93c5fd;
     }
     QPushButton#usrStatTotal:hover,
     QPushButton#usrStatAdmin:hover,
-    QPushButton#usrStatSpecialists:hover,
-    QPushButton#usrStatViewer:hover {
+    QPushButton#usrStatSpecialists:hover {
         background: #eff6ff;
     }
     QPushButton#primaryBtn {
@@ -957,7 +941,7 @@ def _password_meets_policy(password):
 
 
 def _assignable_roles():
-    return ["clinician", "viewer", "admin"]
+    return ["clinician", "admin"]
 
 
 def _add_eye_toggle(field):
@@ -1606,16 +1590,10 @@ class UsersPage(QWidget):
         self.specialists_chip.setCheckable(True)
         self.specialists_chip.clicked.connect(lambda _checked=False: self._set_role_filter("clinician"))
 
-        self.viewer_chip = QPushButton("Viewer 0")
-        self.viewer_chip.setObjectName("usrStatViewer")
-        self.viewer_chip.setCheckable(True)
-        self.viewer_chip.clicked.connect(lambda _checked=False: self._set_role_filter("viewer"))
-
         self._role_filter_buttons = {
             "all": self.total_chip,
             "admin": self.admin_chip,
             "clinician": self.specialists_chip,
-            "viewer": self.viewer_chip,
         }
         self._sync_role_filter_buttons()
 
@@ -1643,7 +1621,7 @@ class UsersPage(QWidget):
         self.search_input.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         users_toolbar.addWidget(self.search_input)
 
-        for chip in (self.total_chip, self.admin_chip, self.specialists_chip, self.viewer_chip):
+        for chip in (self.total_chip, self.admin_chip, self.specialists_chip):
             chip.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
             users_toolbar.addWidget(chip)
 
@@ -1991,7 +1969,7 @@ class UsersPage(QWidget):
 
     def _set_role_filter(self, role_key: str):
         normalized = str(role_key or "all").strip().lower()
-        if normalized not in {"all", "admin", "clinician", "viewer"}:
+        if normalized not in {"all", "admin", "clinician"}:
             normalized = "all"
         self.active_role_filter = normalized
         self._sync_role_filter_buttons()
@@ -2010,13 +1988,11 @@ class UsersPage(QWidget):
         total_count = len(users)
         admin_count = sum(1 for user in users if user.get("role") == "admin")
         clinician_count = sum(1 for user in users if user.get("role") == "clinician")
-        viewer_count = sum(1 for user in users if user.get("role") == "viewer")
 
         if hasattr(self, "total_chip"):
             self.total_chip.setText(f"Total {total_count}")
             self.admin_chip.setText(f"Admin {admin_count}")
             self.specialists_chip.setText(f"Clinician {clinician_count}")
-            self.viewer_chip.setText(f"Viewer {viewer_count}")
             self._sync_role_filter_buttons()
 
         query = ""

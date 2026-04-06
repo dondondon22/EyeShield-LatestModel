@@ -17,7 +17,7 @@ from typing import Any, Optional
 from referrals import ReferralService
 
 DB_FILE = "users.db"
-VALID_ROLES = {"clinician", "admin", "viewer"}
+VALID_ROLES = {"clinician", "admin"}
 VALID_SPECIALIZATIONS = {"optometrist", "ophthalmologist"}
 ADMIN_ROLE = "admin"
 MIN_PASSWORD_LENGTH = 12
@@ -299,6 +299,7 @@ class UserManager:
         cur.execute("UPDATE users SET contact = '' WHERE contact IS NULL")
         cur.execute("UPDATE users SET availability_json = '' WHERE availability_json IS NULL")
         cur.execute("UPDATE users SET is_active = 1 WHERE is_active IS NULL")
+        cur.execute("UPDATE users SET role = 'clinician' WHERE role = 'viewer'")
         cur.execute(
             """
             UPDATE users

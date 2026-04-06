@@ -1042,7 +1042,7 @@ class SettingsPage(QWidget):
 
     def _configure_session_support_section(self):
         role = self._active_role()
-        show_session_support = role in {"admin", "clinician", "viewer"}
+        show_session_support = role in {"admin", "clinician"}
         is_admin = role == "admin"
         self.session_group.setVisible(show_session_support)
         self.support_group.setVisible(is_admin)

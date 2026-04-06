@@ -46,7 +46,7 @@ class ReferralService:
         if not value:
             return "Dr. Unknown"
         lowered = value.lower()
-        if lowered in {"clinician", "admin", "viewer", "system", "__legacy_unknown__", "unknown"}:
+        if lowered in {"clinician", "admin", "system", "__legacy_unknown__", "unknown"}:
             return "Unknown"
         if " " not in value and any(char.isdigit() for char in value):
             return value
@@ -198,7 +198,7 @@ class ReferralService:
             cur.execute(
                 """
                 INSERT INTO users (username, password_hash, role)
-                VALUES (?, ?, 'viewer')
+                VALUES (?, ?, 'clinician')
                 """,
                 (username, "!legacy-migrated-user"),
             )
